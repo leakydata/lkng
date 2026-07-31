@@ -31,10 +31,10 @@ probe_web() { # $1=id $2=label — webapp contracts via HTTP
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),$1,$2,$code_time" >>"$OUT"
 }
 
-probe_state() { # $1=id $2=label — raw contracts via the client API
+probe_state() { # $1=id $2=label $3=ws_port — raw contracts via the client API
   local start elapsed code
   start=$(date +%s.%N)
-  if "$HOME/.local/bin/fdev" execute get "$1" -o /dev/null --timeout 120 >/dev/null 2>&1; then
+  if "$HOME/.local/bin/fdev" -p "$3" execute get "$1" -o /dev/null --timeout 120 >/dev/null 2>&1; then
     code=200
   else
     code=000
@@ -46,6 +46,14 @@ probe_state() { # $1=id $2=label — raw contracts via the client API
 echo "gate1-probe: every ${INTERVAL}s -> $OUT (ctrl-c to stop)"
 while true; do
   probe_web "$BASELINE_ID" baseline_popular
-  [ -n "$EXTRA_ID" ] && probe_state "$EXTRA_ID" fresh_zero_subscriber
+  if [ -n "$EXTRA_ID" ]; then
+    # Series 2: via the PUBLISHER node (measures local retention).
+    probe_state "$EXTRA_ID" fresh_zero_subscriber 7509
+    # Series 3: via a NON-publisher node on :7510 (measures true network
+    # retention — this is the number Gate 1 actually turns on). Skipped
+    # silently if node2 isn't running.
+    ss -tln 2>/dev/null | grep -q ':7510 ' &&
+      probe_state "$EXTRA_ID" fresh_from_node2 7510
+  fi
   sleep "$INTERVAL"
 done
