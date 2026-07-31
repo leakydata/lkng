@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// ghostkey delegate's `ScopedPayload` discipline: *the raw payload is
 /// never signed alone*. Changing this invalidates every existing
 /// signature — it is wire format, not a constant to tidy.
-pub const SIG_DOMAIN: &[u8] = b"lkng/presence-record/v1";
+pub const SIG_DOMAIN: &str = "lkng/presence-record/v1";
 
 /// Which cell and epoch a state belongs to. These are the contract
 /// *parameters* (part of `hash(code, params)`, so each `(cell, epoch)` is
@@ -166,7 +166,7 @@ impl PresenceRecord {
     pub fn signing_payload(&self, params: &CellParams) -> Result<Vec<u8>, PresenceError> {
         #[derive(Serialize)]
         struct Scoped<'a> {
-            domain: &'a [u8],
+            domain: &'a str,
             schema_v: u8,
             cell_id: &'a str,
             epoch: u64,
@@ -331,7 +331,7 @@ impl ComposableState for CellState {
         delta: &Option<Self::Delta>,
     ) -> Result<(), String> {
         if let Some(records) = delta {
-            CellState::apply_delta(self, records.clone());
+            self.apply_records(records.clone());
         }
         Ok(())
     }
@@ -376,7 +376,7 @@ mod tests {
         let r = rec(1, 100);
         let p = r.signing_payload(&params("9q8yy", 20666)).unwrap();
         assert!(
-            p.windows(SIG_DOMAIN.len()).any(|w| w == SIG_DOMAIN),
+            p.windows(SIG_DOMAIN.len()).any(|w| w == SIG_DOMAIN.as_bytes()),
             "domain tag must be inside the signed bytes"
         );
     }
@@ -416,13 +416,13 @@ mod tests {
         let d = cell.delta(&parent, &p, &empty.summary());
         assert!(d.is_some());
         let empty_parent = empty.clone();
-        empty.apply_delta(&empty_parent, &p, &d).unwrap();
+        ComposableState::apply_delta(&mut empty, &empty_parent, &p, &d).unwrap();
         assert_eq!(empty, cell, "trait path reproduces the state");
 
         // None delta is a no-op, not an error.
         let before = empty.clone();
         let bp = before.clone();
-        empty.apply_delta(&bp, &p, &None).unwrap();
+        ComposableState::apply_delta(&mut empty, &bp, &p, &None).unwrap();
         assert_eq!(empty, before);
     }
 

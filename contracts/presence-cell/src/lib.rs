@@ -82,7 +82,7 @@ impl ContractInterface for Contract {
                         continue;
                     }
                     let delta: Vec<PresenceRecord> = decode(d.as_ref(), "delta")?;
-                    cell.apply_delta(delta);
+                    cell.apply_records(delta);
                 }
                 _ => {}
             }
