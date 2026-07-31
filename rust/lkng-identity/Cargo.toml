@@ -1,0 +1,24 @@
+[package]
+name = "lkng-identity"
+version = "0.1.0"
+description = "ML-DSA-65 identity: keypair, scoped signing, and passphrase-encrypted backup bundles"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lkng-presence = { path = "../lkng-presence" }
+argon2 = "0.5"
+blake3 = "1"
+bs58 = "0.5"
+chacha20poly1305 = "0.10"
+ciborium = "0.2"
+ml-dsa = { version = "0.1.1", features = ["alloc"] }
+rand_core = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+thiserror = { workspace = true }
+zeroize = "1"
+
+[dev-dependencies]
+rand = "0.9"

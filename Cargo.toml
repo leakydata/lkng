@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "rust/lkng-identity",
     "rust/lkng-location",
     "rust/lkng-presence",
     "rust/lkng-transport",
