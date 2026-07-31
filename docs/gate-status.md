@@ -98,7 +98,7 @@ watch ring stability and state integrity.
 | --- | --- | --- |
 | hello-lkng | `DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT` | pipeline probe, Gate 1 series |
 | presence-cell v1 (unsigned) | `8QoVUmp1jFtQ15UU8ejVBW6QitarLWyjkPQo9pVX9FFS` | superseded — placeholder signatures |
-| **presence-cell v2 (signed, verifying)** | `BhoDpconffn4vLJPq4yBWtA4QguyZ856neMR4ddu3PMt` | cell 9q8yy epoch 20666; real ML-DSA-65 signature (3309 B); contract verifies every record in `validate_state`; node2 fetch 1.16 s, byte-identical, and the fetched bytes re-verify offline while REJECTING replay into another cell |
+| presence-cell v2 (signed, verifying) | `BhoDpconffn4vLJPq4yBWtA4QguyZ856neMR4ddu3PMt` | cell 9q8yy epoch 20666; real ML-DSA-65 signature (3309 B); contract verifies every record in `validate_state`; node2 fetch 1.16 s, byte-identical, and the fetched bytes re-verify offline while REJECTING replay into another cell |
 
 ## Finding: UPDATE to cold contracts fails (2026-07-31)
 
@@ -213,3 +213,36 @@ Live: cell 9q8yy epoch 20667 =
 `bWDmh9wqYw5` does. Epoch 20666 kept the older master-signed tile, which
 is also a live demonstration that epoch rollover produces a genuinely
 separate contract.
+
+## Profile contract live (2026-07-31)
+
+`73s49yXNmtGsf9VQA9y9fFyqRK38PE2RzBYeGJVCgL35` — handle `F5MjsxWX34C`,
+published and fetched byte-identical from the non-publisher node, then
+re-verified offline from the network bytes.
+
+Single-writer, Delta-shaped. The owner's durable verifying key is pinned in
+the contract **parameters**, so the address *is* the identity: `hash(code,
+params)` differs per owner and the contract rejects any state not signed by
+that key. This closes Delta's address-claiming problem outright — there is
+no first-write-wins race, because a squatter's write simply fails
+verification (test: `another_identity_cannot_occupy_this_address`).
+
+Delta lessons carried over and tested:
+
+- per-item signatures, not whole-state
+- monotonic sequence with a **content-hash tiebreak**, so equal-sequence
+  conflicts resolve identically on every peer with no clock involved
+- **signature schema evolution**: `verify_state` tries the v2 payload
+  layout then falls back to v1, so adding a field later doesn't silently
+  delete every profile already on the network
+- **authenticated tombstones bound to their sequence**: retargeting a
+  deletion breaks its signature (`forged_deletion_is_rejected`), and a
+  deletion is sticky against replay of older bodies while still allowing
+  the owner to re-publish with a higher sequence
+
+Privacy separation is verified against real network bytes
+(`examples/verify_profile_from_network.rs`): the profile contains **no
+epoch key**, so holding someone's profile does not let you locate their
+tiles — and the tiles carry no durable key, so scraping a cell does not
+lead to the profile. The link exists in exactly one direction, only when
+its owner chooses to prove it.
