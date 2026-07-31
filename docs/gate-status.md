@@ -70,3 +70,10 @@ watch ring stability and state integrity.
 - node2 `:7510` / network port 31338, dirs under `~/.cache/lkng-node2/`.
 - Toolchain: Rust 1.97.1 (workspace) + 1.94.0 (freenet-core pin),
   stdlib 0.8.5, fdev 0.3.278, freenet 0.2.116, NDK r27c, JDK 21+25.
+
+## Live contracts (mainnet)
+
+| Contract | ID | Notes |
+| --- | --- | --- |
+| hello-lkng | `DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT` | pipeline probe, Gate 1 series |
+| presence-cell (9q8yy, epoch 20666) | `8QoVUmp1jFtQ15UU8ejVBW6QitarLWyjkPQo9pVX9FFS` | first real grid cell; genesis record "first tile in the grid"; node2 fetch 0.7 s |

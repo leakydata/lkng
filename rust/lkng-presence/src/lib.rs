@@ -157,6 +157,39 @@ impl CellState {
         self.truncate();
     }
 
+    /// Summary for delta sync: the set of record ids this peer holds.
+    pub fn summary(&self) -> std::collections::BTreeSet<RecordId> {
+        self.records.keys().copied().collect()
+    }
+
+    /// Records the peer (per its summary) is missing. `None` when nothing —
+    /// the contract MUST map that to zero bytes (Delta #5072), never an
+    /// encoded empty vec.
+    pub fn delta_for(
+        &self,
+        peer_has: &std::collections::BTreeSet<RecordId>,
+    ) -> Option<Vec<PresenceRecord>> {
+        let missing: Vec<PresenceRecord> = self
+            .records
+            .iter()
+            .filter(|(id, _)| !peer_has.contains(*id))
+            .map(|(_, r)| r.clone())
+            .collect();
+        if missing.is_empty() {
+            None
+        } else {
+            Some(missing)
+        }
+    }
+
+    /// Apply a delta: insert each valid record, then truncate.
+    pub fn apply_delta(&mut self, records: Vec<PresenceRecord>) {
+        for r in records {
+            self.insert(r);
+        }
+        self.truncate();
+    }
+
     /// Keep the newest [`MAX_RECORDS`] by `(timestamp desc, id desc)`.
     pub fn truncate(&mut self) {
         if self.records.len() <= MAX_RECORDS {
