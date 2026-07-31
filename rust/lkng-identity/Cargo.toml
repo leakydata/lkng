@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+lkng-inbox = { path = "../lkng-inbox" }
 lkng-presence = { path = "../lkng-presence" }
 lkng-profile = { path = "../lkng-profile" }
 argon2 = "0.5"
@@ -15,6 +16,9 @@ bs58 = "0.5"
 chacha20poly1305 = "0.10"
 ciborium = "0.2"
 ml-dsa = { version = "0.1.1", features = ["alloc"] }
+hkdf = "0.12"
+sha2 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand_core = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"

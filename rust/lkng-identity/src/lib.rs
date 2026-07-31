@@ -571,3 +571,321 @@ mod tests {
         assert!(a.len() <= 12, "handle must be short enough to share: {a}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Message requests
+// ---------------------------------------------------------------------------
+
+use hkdf::Hkdf;
+use lkng_inbox::{Envelope, InboxParams, InboxState, ProcessedSet};
+use sha2::Sha256;
+use x25519_dalek::{PublicKey as XPublic, StaticSecret as XSecret};
+
+/// Domain tag for the message-sealing KDF.
+pub const MSG_KDF_DOMAIN: &[u8] = b"lkng/message-seal/v1";
+/// Domain tag for deriving the X25519 encryption key from the master seed.
+pub const ENC_KEY_DOMAIN: &[u8] = b"lkng/encryption-key/v1";
+
+impl Identity {
+    /// This identity's X25519 **encryption** keypair secret.
+    ///
+    /// Separate from the ML-DSA signing key because they do different jobs
+    /// and ML-DSA cannot do this one: it is a signature scheme with no
+    /// key agreement. Deriving both from the same seed keeps recovery to
+    /// a single 32-byte backup.
+    fn encryption_secret(&self) -> XSecret {
+        let derived = blake3::keyed_hash(&self.seed, ENC_KEY_DOMAIN);
+        XSecret::from(*derived.as_bytes())
+    }
+
+    /// The public half, published in a profile so people can write to you.
+    pub fn encryption_public_key(&self) -> [u8; 32] {
+        XPublic::from(&self.encryption_secret()).to_bytes()
+    }
+
+    /// Parameters addressing this identity's inbox.
+    pub fn inbox_params(&self) -> InboxParams {
+        InboxParams::new(self.verifying_key_bytes())
+    }
+
+    /// Seal a message to a recipient, given their published X25519
+    /// encryption key.
+    ///
+    /// ECIES, the same construction River uses: a fresh ephemeral keypair
+    /// per message, ECDH against the recipient's static key, HKDF to a
+    /// symmetric key, XChaCha20-Poly1305 to encrypt. The ephemeral public
+    /// key rides along in the envelope.
+    ///
+    /// Because the ephemeral secret is discarded immediately, compromising
+    /// the *sender* later reveals nothing about messages already sent.
+    /// Compromising the recipient's long-term key does expose past
+    /// messages to them — full forward secrecy needs ratcheting, which
+    /// belongs to the accepted-conversation contract rather than to a
+    /// first-contact envelope.
+    ///
+    /// X25519 is not post-quantum, unlike the signatures. That asymmetry is
+    /// inherited from River and worth revisiting with ML-KEM (FIPS 203)
+    /// once the conversation layer exists; recorded here rather than left
+    /// to be discovered.
+    pub fn seal_message(
+        &self,
+        recipient_enc_pub: &[u8; 32],
+        recipient_durable_vk: &[u8],
+        epoch: u64,
+        plaintext: &[u8],
+        sent_ms: u64,
+    ) -> Result<Envelope, IdentityError> {
+        let epoch_id = self.for_epoch(epoch);
+
+        // Ephemeral key, bound to this message so the same plaintext twice
+        // never produces the same ciphertext or reuses a nonce.
+        let eph_seed = {
+            let mut h = blake3::Hasher::new();
+            h.update(b"lkng/ephemeral/v1");
+            h.update(recipient_enc_pub);
+            h.update(&sent_ms.to_le_bytes());
+            h.update(plaintext);
+            *blake3::keyed_hash(&epoch_id.seed, h.finalize().as_bytes()).as_bytes()
+        };
+        let eph_secret = XSecret::from(eph_seed);
+        let eph_public = XPublic::from(&eph_secret);
+        let shared = eph_secret.diffie_hellman(&XPublic::from(*recipient_enc_pub));
+
+        let key = kdf(shared.as_bytes(), &eph_public.to_bytes(), recipient_enc_pub);
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        let nonce = nonce_from(&eph_public.to_bytes(), sent_ms);
+        let sealed = cipher
+            .encrypt(XNonce::from_slice(&nonce), plaintext)
+            .map_err(|_| IdentityError::BadKey)?;
+
+        // ephemeral public key || ciphertext
+        let mut ciphertext = Vec::with_capacity(32 + sealed.len());
+        ciphertext.extend_from_slice(&eph_public.to_bytes());
+        ciphertext.extend_from_slice(&sealed);
+
+        let params = InboxParams::new(recipient_durable_vk.to_vec());
+        let mut env = Envelope {
+            sender_epoch_vk: epoch_id.verifying_key_bytes(),
+            epoch,
+            ciphertext,
+            sent_ms,
+            sig: Vec::new(),
+        };
+        let payload = env
+            .signing_payload(&params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = epoch_id
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        env.sig = sig.encode().to_vec();
+        Ok(env)
+    }
+
+    /// Open a message addressed to this identity.
+    ///
+    /// The signature is checked **before** decryption, so a forged sender
+    /// never gets their bytes near the cipher.
+    pub fn open_message(&self, env: &Envelope) -> Result<Vec<u8>, IdentityError> {
+        lkng_inbox::verify::verify_envelope(env, &self.inbox_params())
+            .map_err(|_| IdentityError::BadSignature)?;
+        if env.ciphertext.len() < 32 + 16 {
+            return Err(IdentityError::Undecryptable);
+        }
+        let (eph_bytes, sealed) = env.ciphertext.split_at(32);
+        let eph: [u8; 32] = eph_bytes.try_into().map_err(|_| IdentityError::Undecryptable)?;
+
+        let my_pub = self.encryption_public_key();
+        let shared = self.encryption_secret().diffie_hellman(&XPublic::from(eph));
+        let key = kdf(shared.as_bytes(), &eph, &my_pub);
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        let nonce = nonce_from(&eph, env.sent_ms);
+        cipher
+            .decrypt(XNonce::from_slice(&nonce), sealed)
+            .map_err(|_| IdentityError::Undecryptable)
+    }
+
+    /// Sign the recipient's processed-set, so peers can distinguish a
+    /// genuine "I have read these" from anyone else trying to hide
+    /// messages from you.
+    pub fn sign_processed(&self, state: &mut InboxState) -> Result<(), IdentityError> {
+        let params = self.inbox_params();
+        let processed = ProcessedSet { ids: state.processed.ids.clone(), sig: None };
+        let payload = processed
+            .signing_payload(&params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = self
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        state.processed.sig = Some(sig.encode().to_vec());
+        Ok(())
+    }
+}
+
+/// HKDF over the ECDH output, binding both public keys so a shared secret
+/// can never be reused in another context.
+fn kdf(shared: &[u8], eph_pub: &[u8; 32], recipient_pub: &[u8; 32]) -> [u8; 32] {
+    let mut info = Vec::with_capacity(MSG_KDF_DOMAIN.len() + 64);
+    info.extend_from_slice(MSG_KDF_DOMAIN);
+    info.extend_from_slice(eph_pub);
+    info.extend_from_slice(recipient_pub);
+    let hk = Hkdf::<Sha256>::new(None, shared);
+    let mut out = [0u8; 32];
+    hk.expand(&info, &mut out).expect("32 bytes is a valid HKDF length");
+    out
+}
+
+fn nonce_from(eph_pub: &[u8; 32], sent_ms: u64) -> [u8; 24] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"lkng/message-nonce/v1");
+    h.update(eph_pub);
+    h.update(&sent_ms.to_le_bytes());
+    let mut n = [0u8; 24];
+    n.copy_from_slice(&h.finalize().as_bytes()[..24]);
+    n
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+
+    #[test]
+    fn seal_and_open_roundtrip() {
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let env = alice
+            .seal_message(
+                &bob.encryption_public_key(),
+                &bob.verifying_key_bytes(),
+                20670,
+                b"hi, saw your tile",
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(bob.open_message(&env).unwrap(), b"hi, saw your tile");
+    }
+
+    #[test]
+    fn a_third_party_cannot_open_it() {
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let eve = Identity::from_seed([0xE5; 32]);
+        let env = alice
+            .seal_message(
+                &bob.encryption_public_key(),
+                &bob.verifying_key_bytes(),
+                20670,
+                b"private",
+                1_000,
+            )
+            .unwrap();
+        assert!(eve.open_message(&env).is_err(), "not addressed to eve");
+    }
+
+    #[test]
+    fn envelope_does_not_carry_the_senders_durable_identity() {
+        // Messaging must not undo what epoch subkeys bought us.
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let env = alice
+            .seal_message(
+                &bob.encryption_public_key(),
+                &bob.verifying_key_bytes(),
+                20670,
+                b"hello",
+                1_000,
+            )
+            .unwrap();
+        assert_ne!(env.sender_epoch_vk, alice.verifying_key_bytes());
+        assert_eq!(
+            env.sender_epoch_vk,
+            alice.for_epoch(20670).verifying_key_bytes(),
+            "recipient can tie the message to the tile they tapped"
+        );
+    }
+
+    #[test]
+    fn tampered_ciphertext_is_rejected_before_decryption() {
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let mut env = alice
+            .seal_message(
+                &bob.encryption_public_key(),
+                &bob.verifying_key_bytes(),
+                20670,
+                b"hello",
+                1_000,
+            )
+            .unwrap();
+        let last = env.ciphertext.len() - 1;
+        env.ciphertext[last] ^= 0xFF;
+        assert!(matches!(
+            bob.open_message(&env),
+            Err(IdentityError::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn envelope_cannot_be_replayed_into_another_inbox() {
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let carol = Identity::from_seed([0xC0; 32]);
+        let env = alice
+            .seal_message(
+                &bob.encryption_public_key(),
+                &bob.verifying_key_bytes(),
+                20670,
+                b"for bob only",
+                1_000,
+            )
+            .unwrap();
+        // Carol's inbox must not accept an envelope signed for bob's.
+        assert!(
+            lkng_inbox::verify::verify_envelope(&env, &carol.inbox_params()).is_err(),
+            "forging 'they messaged you' must be impossible"
+        );
+    }
+
+    #[test]
+    fn identical_plaintexts_produce_distinct_ciphertexts() {
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob = Identity::from_seed([0xB0; 32]);
+        let a = alice
+            .seal_message(&bob.encryption_public_key(), &bob.verifying_key_bytes(), 20670, b"hi", 1)
+            .unwrap();
+        let b = alice
+            .seal_message(&bob.encryption_public_key(), &bob.verifying_key_bytes(), 20670, b"hi", 2)
+            .unwrap();
+        assert_ne!(a.ciphertext, b.ciphertext, "no nonce or ephemeral reuse");
+    }
+
+    #[test]
+    fn encryption_key_survives_backup_and_differs_from_signing_key() {
+        let id = Identity::from_seed([7; 32]);
+        let bundle = id.to_backup("pass", [1; 16]).unwrap();
+        let restored = Identity::from_backup(&bundle, "pass").unwrap();
+        assert_eq!(id.encryption_public_key(), restored.encryption_public_key());
+        assert_ne!(
+            id.encryption_public_key().as_slice(),
+            &id.verifying_key_bytes()[..32],
+            "encryption and signing keys must be independent"
+        );
+    }
+
+    #[test]
+    fn processed_set_signature_is_owner_bound() {
+        let bob = Identity::from_seed([0xB0; 32]);
+        let mallory = Identity::from_seed([0x77; 32]);
+        let mut state = lkng_inbox::InboxState::default();
+        state.processed.ids.insert([9u8; 32]);
+        bob.sign_processed(&mut state).unwrap();
+        lkng_inbox::verify::verify_state(&state, &bob.inbox_params()).unwrap();
+        assert!(
+            lkng_inbox::verify::verify_state(&state, &mallory.inbox_params()).is_err(),
+            "nobody else may mark your inbox read"
+        );
+    }
+}

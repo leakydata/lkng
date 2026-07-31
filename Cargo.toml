@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "rust/lkng-app",
     "rust/lkng-identity",
+    "rust/lkng-inbox",
     "rust/lkng-location",
     "rust/lkng-presence",
     "rust/lkng-profile",
