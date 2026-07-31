@@ -1,0 +1,25 @@
+[package]
+name = "lkng-transport-freenet"
+version = "0.1.0"
+description = "Freenet backend: one persistent WebSocket session, seed-PUT before update (River's write pattern)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lkng-transport = { path = "../lkng-transport" }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+freenet-stdlib = { version = "0.8.5", features = ["net"] }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+tokio-tungstenite = "0.27"
+tracing = "0.1"
+
+[dev-dependencies]
+ciborium = "0.2"
+lkng-identity = { path = "../lkng-identity" }
+lkng-presence = { path = "../lkng-presence" }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = "0.3"
