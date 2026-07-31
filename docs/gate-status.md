@@ -77,3 +77,24 @@ watch ring stability and state integrity.
 | --- | --- | --- |
 | hello-lkng | `DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT` | pipeline probe, Gate 1 series |
 | presence-cell (9q8yy, epoch 20666) | `8QoVUmp1jFtQ15UU8ejVBW6QitarLWyjkPQo9pVX9FFS` | first real grid cell; genesis record "first tile in the grid"; node2 fetch 0.7 s |
+
+## Finding: UPDATE to cold contracts fails (2026-07-31)
+
+`fdev execute update` (both `Delta` and `--as-state`) against the freshly
+published presence cell fails with `UPDATE failed: missing contract` — from
+the publisher node AND node2 — while GET succeeds from both in <1 s.
+Re-publishing with `--subscribe` doesn't change it. Reads propagate; the
+update op appears to route to ring-location hosts that don't hold the
+contract. River works subscription-first (subscribe → delta mesh → pushes),
+which suggests the reliable write path is: subscribe, wait for the mesh,
+then update — not fire-and-forget updates at a cold contract.
+
+Implications for LKNG: presence publishing must be subscription-first (the
+app subscribes to its own cell anyway, so this matches the design), and this
+needs an upstream issue with a minimal repro. Repro artifacts:
+`contracts/presence-cell/{state2.bin,delta.bin}` generators in `examples/`.
+
+## Gate 2 addendum
+
+x86_64-linux-android also builds clean (4m54s, 55 MB unstripped) — both
+ABIs needed for emulator + device testing now exist.
