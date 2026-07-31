@@ -5,7 +5,7 @@ fn main() {
     let path = std::env::args().nth(1).expect("usage: verify_from_network <state.bin>");
     let bytes = std::fs::read(&path).expect("read state");
     let cell: CellState = ciborium::de::from_reader(&bytes[..]).expect("decode state");
-    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20666 };
+    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20667 };
 
     let mut ok = 0usize;
     for (id, r) in &cell.records {
@@ -16,7 +16,7 @@ fn main() {
         println!("  verified: \"{}\" (sig {} B)", r.headline, r.sig.len());
     }
     // The replay check, against real network bytes.
-    let wrong = CellParams { schema_v: 1, cell_id: "dr5ru".into(), epoch: 20666 };
+    let wrong = CellParams { schema_v: 1, cell_id: "dr5ru".into(), epoch: 20667 };
     for r in cell.records.values() {
         assert!(verify_self_contained(r, &wrong).is_err(), "must not verify in another cell");
     }

@@ -178,3 +178,38 @@ Delta's 10-char prefix) for LKNG profile handles later. And the reminder
 that **delegates need migration too**, not just contracts: replacing a
 delegate's storage schema changes its WASM hash and therefore its
 `DelegateKey`, requiring `legacy_delegates.toml`-driven re-import.
+
+## Finding: self-contained records nearly broke pseudonym rotation (2026-07-31)
+
+Adding the inline `verifying_key` to presence records (for River-#145
+self-containment) quietly created a linkability hole large enough to
+nullify PLAN.md's "durable profile revealed only after mutual
+interaction":
+
+The key travels in the tile, so it is public to anyone scraping a cell. If
+tiles were signed by the durable identity, a scraper could lift the key
+from a tile, derive the owner's profile address, and fetch the full
+profile — and every tile that user ever posted would be permanently
+linkable to one person across all cells and epochs. Rotation would have
+been decorative.
+
+**Fix: per-epoch subkeys.** `Identity::for_epoch(epoch)` derives a
+throwaway signing identity via `BLAKE3::keyed_hash(master_seed,
+"lkng/epoch-key/v1" || epoch)`. Because that is a PRF, holding one epoch
+key reveals nothing about any other epoch key or about the master seed;
+the owner can always re-derive any epoch's key (so tiles stay updatable,
+and recovery from a backup restores that ability). `sign_presence` derives
+the subkey from `params.epoch` internally — there is deliberately **no API
+that signs a tile with the durable key**, so it cannot happen by accident.
+
+Enforced by tests (`presence_never_exposes_the_durable_key`,
+`epoch_keys_are_unlinkable_across_epochs`) and by
+`examples/audit_privacy.rs`, which scans **real network-fetched bytes** and
+asserts the durable key appears nowhere in them.
+
+Live: cell 9q8yy epoch 20667 =
+`E4SWQ7188dkvuohrfTfjohn5YLQyoHC4j6utj85j2xgj`. Durable handle
+`F5MjsxWX34C` never appears on the network; the epoch handle
+`bWDmh9wqYw5` does. Epoch 20666 kept the older master-signed tile, which
+is also a live demonstration that epoch rollover produces a genuinely
+separate contract.
