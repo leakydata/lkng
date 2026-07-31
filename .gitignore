@@ -1,0 +1,6 @@
+target/
+node_modules/
+dist/
+*.wasm
+!published-contract/*.wasm
+.env

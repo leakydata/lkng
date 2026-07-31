@@ -1,0 +1,18 @@
+[package]
+name = "lkng-transport-mock"
+version = "0.1.0"
+description = "In-memory Transport for tests and UI development — no network"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lkng-transport = { path = "../lkng-transport" }
+async-trait = { workspace = true }
+blake3 = "1"
+bytes = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

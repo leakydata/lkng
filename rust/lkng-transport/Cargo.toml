@@ -1,0 +1,13 @@
+[package]
+name = "lkng-transport"
+version = "0.1.0"
+description = "Backend-agnostic transport trait for LKNG: publish/subscribe/get, blobs, sign/verify"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
