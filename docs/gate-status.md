@@ -119,3 +119,61 @@ needs an upstream issue with a minimal repro. Repro artifacts:
 
 x86_64-linux-android also builds clean (4m54s, 55 MB unstripped) — both
 ABIs needed for emulator + device testing now exist.
+
+## Ecosystem adoption: freenet-scaffold + ghostkeys (2026-07-31)
+
+Reviewed both repos for reusable capability. Both paid off; one found a bug.
+
+### freenet-scaffold (LGPL-3.0, v0.2.2) — ADOPTED
+
+`ComposableState` is the ecosystem's CRDT interface: `verify / summarize /
+delta -> Option<Delta> / apply_delta / merge`, all threaded with a
+`parent_state` so a sub-state can validate against sibling fields.
+`lkng-presence` had independently converged on the same five methods, so
+`impl ComposableState for CellState` was mechanical. Worth having because:
+
+- `CellState` can now be nested in a larger state by the `#[composable]`
+  macro (how River composes `ChatRoomStateV1`).
+- `freenet_scaffold::convergence` ships a `ConvergenceTestHarness` that
+  permutes operations and checks commutativity/idempotency/associativity —
+  a stronger version of LKNG's hand-rolled property test, and the natural
+  home for future contracts' convergence tests.
+- `ParentState = Self` today (presence is top-level); that single line is
+  what changes if presence is ever nested.
+
+Note the inherent `apply_delta` was renamed `apply_records` — same name as
+the trait method shadowed it at call sites.
+
+### ghostkeys (NO LICENSE — patterns only, code not copyable) — FOUND A BUG
+
+The delegate's authorization model is worth copying wholesale later:
+`SignatureRequestor` is **runtime-attested** (`WebApp(ContractInstanceId)` |
+`Delegate(DelegateKey)`), and scopes are least-privilege — third-party apps
+that request access get only `{ReadPublic, Sign}`, never `Export`, `Delete`
+or `Admin`, which stay with the vault.
+
+The load-bearing idea is `ScopedPayload`: *"The raw payload is never signed
+alone — always wrapped with the attested caller identity."*
+
+**Applying that lens to LKNG's own presence record exposed a real
+vulnerability in code written the same day.** `PresenceRecord` carries no
+cell or epoch — those are contract *parameters*. Signing the record alone
+meant a validly-signed tile could be **lifted out of one cell and replayed
+into any other cell or epoch**, fabricating presence anywhere on earth from
+a single honest record. That is a location-spoofing primitive in a
+location-privacy app.
+
+Fix: `PresenceRecord::signing_payload(&CellParams)` binds
+`(domain_tag, schema_v, cell_id, epoch)` into the signed bytes, so a
+signature is valid only in the contract it was minted for. The domain tag
+additionally prevents a signature over another LKNG structure from being
+reinterpreted as a presence record. Three regression tests cover it;
+`CellParams` moved into `lkng-presence` because it is now a security input,
+not a contract-shell detail.
+
+Also adopted from ghostkeys: `fingerprint()` = first 8 bytes of
+BLAKE3(verifying key), base58 — a shareable-handle scheme (complements
+Delta's 10-char prefix) for LKNG profile handles later. And the reminder
+that **delegates need migration too**, not just contracts: replacing a
+delegate's storage schema changes its WASM hash and therefore its
+`DelegateKey`, requiring `legacy_delegates.toml`-driven re-import.
