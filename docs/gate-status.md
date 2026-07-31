@@ -496,3 +496,57 @@ Three build notes worth keeping:
   panicked in debug — which is the good outcome; in release it would have
   silently wrapped and produced wrong colours nobody would have traced.
   Running the thing in an actual browser found it in one load.
+
+## Encrypted messaging live on mainnet (2026-07-31)
+
+Bob's inbox: `4rTB68B6U1MepZnVcdjWMYTdNz9T8D2cNXFrgzi3BP5M`. Alice sealed a
+message to it; the state was fetched back from the **non-publisher** node
+and read:
+
+```
+1 pending message(s) in bob's inbox
+  from epoch-key QprPyeCP…: "saw your tile - fancy a coffee?"
+no stranger can decrypt; plaintext absent from the published bytes
+```
+
+### A broken design caught before it shipped
+
+The first attempt derived the message key symmetrically from each side's
+own seed — which cannot work, because **ML-DSA is a signature scheme with
+no key agreement**. Sender and recipient would have derived different keys.
+It compiled cleanly; only writing the round-trip test would have caught it.
+
+Replaced with proper **ECIES**, the construction River uses: a fresh
+ephemeral X25519 keypair per message, ECDH against the recipient's static
+encryption key, HKDF-SHA256 to a symmetric key (binding both public keys so
+a shared secret can never be reused in another context), then
+XChaCha20-Poly1305. The ephemeral public key rides in the envelope.
+
+Identities now carry **two** keypairs from one seed: ML-DSA-65 for
+signing, X25519 for encryption. One 32-byte backup still restores both.
+
+### Properties tested rather than asserted
+
+- an envelope **binds its recipient**, so it cannot be lifted into another
+  inbox to forge "they messaged you" — the same replay class as the
+  presence records, caught in a second place
+- signature verified **before** decryption, so a forged sender's bytes
+  never reach the cipher
+- the envelope carries the sender's **epoch** key, not their durable one:
+  messaging does not undo what epoch subkeys bought. The recipient can
+  still tie the message to the tile they tapped.
+- identical plaintexts produce distinct ciphertexts (no nonce or ephemeral
+  reuse)
+- the **processed-set is owner-signed**: nobody else can mark your inbox
+  read and hide messages from you. Processed ids *union* on merge, so two
+  devices reading different messages converge to "both read" instead of
+  one erasing the other.
+- caps everywhere, because an open inbox with an unbounded collection is a
+  free denial-of-service on the recipient's bandwidth
+
+### Honest limitation, recorded not buried
+
+X25519 is **not** post-quantum while the signatures are. That asymmetry is
+inherited from River and documented on `seal_message` itself, along with
+the note that full forward secrecy needs ratcheting and belongs to the
+accepted-conversation contract — this envelope is first contact only.

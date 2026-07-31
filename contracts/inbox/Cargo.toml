@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dev-dependencies]
 lkng-identity = { path = "../../rust/lkng-identity" }
+bs58 = "0.5"
 
 [features]
 contract = ["freenet-stdlib/contract"]
