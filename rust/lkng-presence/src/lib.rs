@@ -87,8 +87,8 @@ pub enum PresenceError {
     HeadlineTooLong,
     #[error("thumbnail exceeds {MAX_THUMBNAIL_BYTES} bytes")]
     ThumbnailTooLarge,
-    #[error("signature exceeds {MAX_SIG_BYTES} bytes or is empty")]
-    BadSignature,
+    #[error("signature is empty or exceeds {MAX_SIG_BYTES} bytes")]
+    MalformedSignature,
     #[error("writer cert exceeds {MAX_WRITER_CERT_BYTES} bytes")]
     WriterCertTooLarge,
     #[error("verifying key is not a valid ML-DSA-65 key")]
@@ -142,7 +142,7 @@ impl PresenceRecord {
             return Err(PresenceError::ThumbnailTooLarge);
         }
         if self.sig.is_empty() || self.sig.len() > MAX_SIG_BYTES {
-            return Err(PresenceError::BadSignature);
+            return Err(PresenceError::MalformedSignature);
         }
         if let Some(cert) = &self.writer_cert {
             if cert.len() > MAX_WRITER_CERT_BYTES {
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(r.validate(), Err(PresenceError::ThumbnailTooLarge));
         let mut r = rec(1, 10);
         r.sig = vec![];
-        assert_eq!(r.validate(), Err(PresenceError::VerificationFailed));
+        assert_eq!(r.validate(), Err(PresenceError::MalformedSignature));
     }
 
     #[test]
