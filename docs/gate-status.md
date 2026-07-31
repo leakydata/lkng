@@ -444,3 +444,29 @@ asserted:
 
 That is the privacy property the whole design exists for, working on
 mainnet, with no server in the path.
+
+## Frontend decision: Dioxus (Rust → WASM), not TypeScript
+
+Phase 0 left this open. The deciding argument is not taste, it is
+**avoiding a second implementation of security-critical code**.
+
+The client must sign presence records (ML-DSA-65 over a canonically
+encoded, domain-separated payload), verify every tile it renders, verify
+fetched profiles, and derive per-epoch subkeys. All of that already exists,
+tested, in `lkng-identity` / `lkng-presence` / `lkng-profile`.
+
+With a TypeScript UI, every one of those would need a JavaScript
+reimplementation — ML-DSA, canonical CBOR, the exact signing-payload
+layout, the epoch derivation. Any divergence between the two produces
+records that verify on one side and not the other, which is precisely the
+failure mode we avoided earlier by making the contract and the client share
+one verifier. Shipping a second signing stack in a different language would
+undo that on purpose.
+
+Dioxus compiles the existing crates straight into the UI. `getrandom`
+works on `wasm32-unknown-unknown` in a browser via its `js` feature (the
+contract target, which has no JS, is why in-contract verification is
+feature-gated to be RNG-free — different target, different constraint).
+
+Delta already ships a Dioxus UI against `freenet_stdlib::client_api::WebApi`,
+so the pattern is proven in the ecosystem.
