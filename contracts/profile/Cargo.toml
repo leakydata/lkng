@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+name = "profile-contract"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/leakydata/lkng"
+
+[dependencies]
+freenet-stdlib = { version = "0.8.5", features = ["contract"] }
+lkng-profile = { path = "../../rust/lkng-profile" }
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+lkng-identity = { path = "../../rust/lkng-identity" }
+
+[features]
+contract = ["freenet-stdlib/contract"]
+default = ["freenet-main-contract", "contract"]
+freenet-main-contract = []
+trace = ["freenet-stdlib/trace"]

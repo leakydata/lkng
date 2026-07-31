@@ -19,6 +19,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use lkng_presence::{CellParams, PresenceRecord};
+use lkng_profile::{ProfileBody, ProfileParams, ProfileState, SignedDeletion};
 use ml_dsa::{MlDsa65, Signature, SigningKey};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -163,6 +164,47 @@ impl Identity {
         Ok(())
     }
 
+    /// Parameters addressing this identity's profile contract. The address
+    /// IS the durable identity, so nobody else can occupy it — and because
+    /// tiles are signed by epoch subkeys, scraping a cell never leads here.
+    pub fn profile_params(&self) -> ProfileParams {
+        ProfileParams::new(self.verifying_key_bytes())
+    }
+
+    /// Sign a profile body with the **durable** key (unlike presence, which
+    /// uses epoch subkeys — a profile is deliberately long-lived and its
+    /// address already reveals the owner key to anyone who has been given
+    /// it).
+    pub fn sign_profile(&self, body: ProfileBody) -> Result<ProfileState, IdentityError> {
+        let params = self.profile_params();
+        let payload = body
+            .signing_payload_current(&params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = self
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        Ok(ProfileState { body: Some(body), sig: Some(sig.encode().to_vec()), deleted: None })
+    }
+
+    /// Sign a profile deletion. `sequence` must exceed the live body's, so
+    /// a deletion cannot be undone by replaying an older write.
+    pub fn sign_profile_deletion(&self, sequence: u64) -> Result<ProfileState, IdentityError> {
+        let params = self.profile_params();
+        let mut tomb = SignedDeletion { sequence, sig: Vec::new() };
+        let payload = tomb
+            .signing_payload(&params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = self
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        tomb.sig = sig.encode().to_vec();
+        Ok(ProfileState { body: None, sig: None, deleted: Some(tomb) })
+    }
+
     /// Encrypt this identity into a recovery bundle under `passphrase`.
     pub fn to_backup(&self, passphrase: &str, salt: [u8; 16]) -> Result<Vec<u8>, IdentityError> {
         let mut key = derive_key(passphrase, &salt);
@@ -236,6 +278,8 @@ impl Identity {
 /// client share exactly one implementation — divergence between the two
 /// would mean records that validate on one side and not the other.
 pub use lkng_presence::verify::{verify_record as verify_presence, verify_self_contained};
+/// Profile verification, shared with the contract for the same reason.
+pub use lkng_profile::verify::verify_state as verify_profile;
 
 /// Short handle from encoded verifying-key bytes.
 pub fn fingerprint_of(verifying_key_bytes: &[u8]) -> String {
@@ -452,6 +496,71 @@ mod tests {
         let c = Identity::backup_locator("other secret");
         assert_eq!(a, b, "same passphrase must find the same bundle");
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn profile_signs_and_verifies() {
+        let id = Identity::from_seed([11; 32]);
+        let body = ProfileBody {
+            display_name: "sam".into(),
+            bio: "here for the plot".into(),
+            tags: vec!["music".into()],
+            photos: vec![],
+            thumbnail: vec![1; 64],
+            sequence: 1,
+        };
+        let state = id.sign_profile(body).unwrap();
+        verify_profile(&state, &id.profile_params()).unwrap();
+    }
+
+    #[test]
+    fn profile_signature_does_not_transfer_to_another_owner() {
+        let alice = Identity::from_seed([11; 32]);
+        let bob = Identity::from_seed([12; 32]);
+        let body = ProfileBody { display_name: "sam".into(), sequence: 1, ..Default::default() };
+        let state = alice.sign_profile(body).unwrap();
+        // Bob cannot mount Alice's signed profile at his own address.
+        assert!(verify_profile(&state, &bob.profile_params()).is_err());
+    }
+
+    #[test]
+    fn tampered_profile_fails() {
+        let id = Identity::from_seed([11; 32]);
+        let body = ProfileBody { display_name: "sam".into(), sequence: 1, ..Default::default() };
+        let mut state = id.sign_profile(body).unwrap();
+        state.body.as_mut().unwrap().bio = "injected".into();
+        assert!(verify_profile(&state, &id.profile_params()).is_err());
+    }
+
+    #[test]
+    fn profile_deletion_verifies() {
+        let id = Identity::from_seed([11; 32]);
+        let tomb = id.sign_profile_deletion(9).unwrap();
+        verify_profile(&tomb, &id.profile_params()).unwrap();
+    }
+
+    #[test]
+    fn forged_deletion_is_rejected() {
+        // Delta lesson: an unauthenticated tombstone lets any peer wipe a
+        // profile it merely copied.
+        let id = Identity::from_seed([11; 32]);
+        let mut tomb = id.sign_profile_deletion(9).unwrap();
+        tomb.deleted.as_mut().unwrap().sequence = 99; // retarget
+        assert!(verify_profile(&tomb, &id.profile_params()).is_err());
+    }
+
+    #[test]
+    fn presence_and_profile_keys_are_separate() {
+        // A tile must never reveal the address of the durable profile.
+        let id = Identity::from_seed([11; 32]);
+        let p = params("9q8yy", 20666);
+        let mut r = blank_record();
+        id.sign_presence(&mut r, &p).unwrap();
+        assert_ne!(
+            r.verifying_key.unwrap(),
+            id.profile_params().owner_vk,
+            "epoch key must not equal the profile's owner key"
+        );
     }
 
     #[test]

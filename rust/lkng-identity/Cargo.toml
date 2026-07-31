@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 lkng-presence = { path = "../lkng-presence" }
+lkng-profile = { path = "../lkng-profile" }
 argon2 = "0.5"
 blake3 = "1"
 bs58 = "0.5"
