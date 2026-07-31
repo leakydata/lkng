@@ -28,8 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inbox_code = std::fs::read(&a[1])?;
 
     // Two people who met through a grid tile a moment ago.
-    let sam = Identity::from_seed([0x5A; 32]);
-    let alex = Identity::from_seed([0xA1; 32]);
+    let sam = Identity::from_seed([0x5B; 32]);
+    let alex = Identity::from_seed([0xA2; 32]);
 
     let (stream, _) = tokio_tungstenite::connect_async(DEFAULT_NODE_URL).await?;
     let demux = Demux::spawn(WebApi::start(stream));
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         subscribe: true,
         blocking_subscribe: false,
     })).await?;
-    tokio::time::timeout(Duration::from_secs(120), r).await??;
+    demux.await_reply(r, Duration::from_secs(120)).await?;
     println!("sam's profile published: {pkey}");
 
     let sam_inbox_params = sam.inbox_params();
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         subscribe: true,
         blocking_subscribe: false,
     })).await?;
-    tokio::time::timeout(Duration::from_secs(120), r).await??;
+    demux.await_reply(r, Duration::from_secs(120)).await?;
     println!("sam's inbox published:   {ikey}");
 
     // --- Alex fetches the profile from the network -----------------------
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         subscribe: false,
         blocking_subscribe: false,
     })).await?;
-    let Reply::Get(bytes) = tokio::time::timeout(Duration::from_secs(120), g).await??
+    let Reply::Get(bytes) = demux.await_reply(g, Duration::from_secs(120)).await?
     else { unreachable!() };
 
     let fetched: ProfileState = ciborium::de::from_reader(&bytes[..])?;
@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             freenet_stdlib::prelude::StateDelta::from(cbor(&delta)),
         ),
     })).await?;
-    tokio::time::timeout(Duration::from_secs(120), r).await??;
+    demux.await_reply(r, Duration::from_secs(120)).await?;
     println!("alex sealed a message to sam's inbox and sent it");
 
     // --- Sam reads it back off the network -------------------------------
@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         subscribe: false,
         blocking_subscribe: false,
     })).await?;
-    let Reply::Get(inbox_bytes) = tokio::time::timeout(Duration::from_secs(120), g).await??
+    let Reply::Get(inbox_bytes) = demux.await_reply(g, Duration::from_secs(120)).await?
     else { unreachable!() };
 
     let inbox: InboxState = ciborium::de::from_reader(&inbox_bytes[..])?;

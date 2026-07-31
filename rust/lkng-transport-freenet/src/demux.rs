@@ -64,6 +64,9 @@ type WaiterKey = (ContractInstanceId, ReplyKind);
 struct Routes {
     waiters: HashMap<WaiterKey, Vec<oneshot::Sender<Reply>>>,
     subs: HashMap<ContractInstanceId, broadcast::Sender<Notification>>,
+    /// Why the reader stopped, if it has. Kept so a caller whose waiter
+    /// was dropped can report the cause instead of a bare "channel closed".
+    last_error: Option<String>,
 }
 
 /// Handle to a running session with a demultiplexed reader.
@@ -98,10 +101,39 @@ impl Demux {
 
     /// Send a request to the node.
     pub async fn send(&self, req: ClientRequest<'static>) -> Result<(), FreenetError> {
-        self.tx
-            .send(req)
-            .await
-            .map_err(|_| FreenetError::Api("session reader has stopped".into()))
+        self.tx.send(req).await.map_err(|_| {
+            FreenetError::Api(format!("session reader has stopped: {}", self.why()))
+        })
+    }
+
+    /// Await a reply, converting a dropped waiter into the reason the
+    /// session ended rather than a silent hang.
+    ///
+    /// Getting this wrong once cost an afternoon: the reader used to exit
+    /// on the first error response while leaving every pending waiter's
+    /// sender alive in the routes map, so callers blocked for their full
+    /// timeout and reported `Elapsed` — which says nothing at all about
+    /// what the node actually refused.
+    pub async fn await_reply(
+        &self,
+        rx: oneshot::Receiver<Reply>,
+        timeout: std::time::Duration,
+    ) -> Result<Reply, FreenetError> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(reply)) => Ok(reply),
+            Ok(Err(_)) => Err(FreenetError::Node(self.why())),
+            Err(_) => Err(FreenetError::Timeout("reply")),
+        }
+    }
+
+    /// The reason the reader stopped, or a placeholder if it is still running.
+    pub fn why(&self) -> String {
+        self.routes
+            .lock()
+            .expect("routes mutex")
+            .last_error
+            .clone()
+            .unwrap_or_else(|| "session closed without a reported error".into())
     }
 
     /// Subscribe to notifications for one contract. Multiple callers may
@@ -133,16 +165,30 @@ async fn reader_loop(
             incoming = api.recv() => {
                 match incoming {
                     Ok(resp) => route(&routes, resp),
-                    Err(_) => break,
+                    Err(e) => {
+                        // A node-side error is not attributable to one
+                        // request, so record it and stop; the shutdown
+                        // below makes every waiter fail immediately with
+                        // this reason attached.
+                        routes.lock().expect("routes mutex").last_error =
+                            Some(e.to_string());
+                        break;
+                    }
                 }
             }
             else => break,
         }
     }
-    // Tell every subscriber the session is gone; waiters simply see their
-    // oneshot dropped, which surfaces as a receive error.
+
     let subs: Vec<_> = {
-        let r = routes.lock().expect("routes mutex");
+        let mut r = routes.lock().expect("routes mutex");
+        if r.last_error.is_none() {
+            r.last_error = Some("session closed".into());
+        }
+        // Drop every pending waiter's sender so its receiver resolves NOW.
+        // Leaving them alive is what turned a clear node error into a
+        // silent stall.
+        r.waiters.clear();
         r.subs.values().cloned().collect()
     };
     for s in subs {

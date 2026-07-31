@@ -550,3 +550,57 @@ X25519 is **not** post-quantum while the signatures are. That asymmetry is
 inherited from River and documented on `seal_message` itself, along with
 the note that full forward secrecy needs ratcheting and belongs to the
 accepted-conversation contract — this envelope is first contact only.
+
+## Full social loop on mainnet: profile → message → read (2026-07-31)
+
+`examples/first_message.rs`, verbatim:
+
+```
+sam's profile published: 9mWhRk2Jdp6Hgmt48WHXzXKpbDiB4aRhY9paoC6ArF7T
+sam's inbox published:   FzAyxgNAdvi9phZwNbJW39dr9bApsNud2WTofUZApNre
+
+alex fetched and verified: "sam" — say hi if you like bad films
+alex sealed a message to sam's inbox and sent it
+
+sam's inbox: 1 pending
+  "the worse the film the better. friday?"
+```
+
+Alex held nothing but an address Sam chose to share, and that was
+sufficient: fetch the profile, verify it, take the published X25519 key,
+seal, send. Sam read it back off the network. Nobody else can decrypt it,
+and the plaintext appears nowhere in the published bytes (both asserted in
+the example, against real network state).
+
+### Profiles now publish an encryption key — and `sign_profile` fills it in
+
+Reachability lives in the profile, not the tile: an encryption key
+travelling with a tile would be one more durable handle for a scraper to
+correlate. `sign_profile` sets it automatically, because leaving it to
+callers means one forgotten field makes an identity silently unmessageable
+— a bug that presents as "nobody ever writes to me". Tested, along with the
+fact that swapping the key breaks the profile signature (otherwise anyone
+could silently redirect a stranger's mail).
+
+### Two failures worth recording
+
+**A demux design flaw turned a clear error into a 120-second silence.**
+The reader exited on the first node-side error but left every pending
+waiter's oneshot *sender* alive in the routes map, so callers blocked for
+their whole timeout and reported `Elapsed` — which says nothing about what
+the node refused. Now the reader records the cause and **clears the waiter
+map on shutdown**, so receivers resolve immediately; `Demux::await_reply`
+turns that into the actual reason. The very next run printed the real
+error in seconds.
+
+**That real error was a live schema-migration failure**, and a useful one:
+adding `encryption_key` to the signed payload made every client signature
+invalid against the **already-deployed** contract WASM, which still
+verified the old layout. The v2→v1 fallback exists for exactly this — but
+the fallback lives in the *new* code while the network was running the
+old. Rebuilding and republishing the contract fixed it.
+
+The lesson generalises: **a signed-payload change is a contract
+migration**, not a client change. Delta's `legacy_contracts.toml`
+discipline is not optional once real users hold state, because they cannot
+be asked to re-sign in lockstep with a deploy.
