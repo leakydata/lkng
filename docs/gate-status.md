@@ -366,3 +366,36 @@ but returns an empty stream for now: fanning update notifications out to
 per-key streams needs a demultiplexer owning `recv`, which lands with the
 UI work. Blob methods fail loudly pending Phase 4's ChunkedPack — a
 plausible stub would be worse than an honest error.
+
+## Live grid working: real-time notifications (2026-07-31)
+
+`src/demux.rs` replaces the scan-until-you-find-your-reply approach with a
+proper demultiplexer: one background task owns `recv()` forever and routes
+each response either to a **oneshot** (a caller awaiting a specific reply,
+matched on contract id *and* response kind) or to a **per-contract
+broadcast** (subscribers). Requests go through the same task, so `WebApi`
+has a single owner and no lock is held across an await on the socket — a
+slow grid view cannot stall the reader.
+
+`examples/live_grid.rs` subscribes to a cell, then writes a tile to it:
+
+```
+session up, reader demultiplexing
+seeded + subscribed: 14c9xkKWeUu9skGwnbZ6ZFVGub1iwLJCtCLqqR29jPPA
+>>> LIVE NOTIFICATION: 11157 bytes, 2 tile(s) in the grid
+update accepted; waiting for the notification to land...
+```
+
+**Note the ordering.** The notification printed *before* the update
+response — they genuinely interleave on the wire. The previous
+`FreenetClient::await_response` would have discarded that notification
+while scanning for its own reply, which is exactly the bug a naive client
+ships with and never notices until the grid mysteriously fails to refresh.
+
+Matching on `(contract_id, ReplyKind)` rather than contract alone also
+matters: a PUT and a GET for the same contract can be in flight together.
+Waiters are FIFO per key so two concurrent identical requests can't steal
+each other's replies.
+
+That is the last piece of plumbing before a grid can be drawn: tiles now
+arrive pushed, not polled.

@@ -24,7 +24,6 @@
 //! 5. **Tombstones must be authenticated and bound to their key** — a
 //!    deletion is as destructive as a write.
 
-use std::collections::BTreeMap;
 
 use freenet_scaffold::ComposableState;
 use serde::{Deserialize, Serialize};

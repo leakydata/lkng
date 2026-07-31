@@ -2,7 +2,7 @@ use lkng_identity::Identity;
 use lkng_presence::{CellParams, PresenceRecord};
 fn main() {
     let id = Identity::from_seed([77u8; 32]); // a second user
-    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20671 };
+    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20673 };
     let mut r = PresenceRecord {
         pseudonym: [0; 32],
         headline: "second user, arriving by delta".into(),

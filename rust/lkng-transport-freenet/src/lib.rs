@@ -23,6 +23,8 @@
 //! before it ever updates — its own comments call this the "seed PUT".
 //! [`FreenetClient::seed`] does the same.
 
+pub mod demux;
+
 use std::collections::HashMap;
 use std::time::Duration;
 

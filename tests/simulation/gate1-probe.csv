@@ -11,3 +11,6 @@ utc_iso,contract,label,http_code,time_total_s
 2026-07-31T19:42:08Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.268072
 2026-07-31T19:42:08Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.076046605
 2026-07-31T19:42:09Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_from_node2,200,.073744893
+2026-07-31T20:12:09Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.002946
+2026-07-31T20:12:09Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.076824738
+2026-07-31T20:12:09Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_from_node2,200,.075728932
