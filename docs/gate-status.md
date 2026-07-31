@@ -54,7 +54,28 @@ watch `fresh_from_node2`; then repeat during higher network load.
   workspace root (`[workspace]` in the contract's Cargo.toml), matching
   Mail/Delta convention. Worth an upstream issue.
 
-**Verdict: OPEN — build running.**
+**ON-DEVICE RUN PASSES (2026-07-31).** Samsung Galaxy Z Flip 4
+(SM-F721U1), **Android 16**, arm64-v8a. Unmodified freenet-core 0.2.116,
+pushed to `/data/local/tmp/lkng`, run via adb shell:
+
+- Executes and starts on Android 16 with **zero code changes**.
+- **Joined the real network and acted as a full relay** — the log shows it
+  processing `SUBSCRIBE relay` requests for other peers (e.g. upstream
+  `45.249.164.109`) and sweeping idle streaming handles. Not a leaf: it
+  carried other people's traffic unprompted.
+- 201 peer-address log events in ~4 min; 28 MB data dir after ~7 min.
+- **Multi-process:** the node runs as 2 PIDs. An Android foreground service
+  must manage the **process group**, not a single PID — killing the parent
+  left a child alive and still networking. This is a concrete design
+  requirement for Phase 5, found early.
+- Survived `pkill -9` of all processes and **cold-restarted from the same
+  data dir** (new pid), no corruption or load errors in the log.
+
+Not yet measured: battery drain over hours, cellular-vs-Wi-Fi behaviour,
+and behaviour under Android's Doze/App Standby (all Phase 5/Gate 3 work,
+and all require an APK rather than adb shell).
+
+**Verdict: PASS for build + run. Battery/Doze behaviour still open.**
 
 ## Gate 3 — Duty-cycled contribution
 
