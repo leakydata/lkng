@@ -1,0 +1,21 @@
+[package]
+name = "lkng-app"
+version = "0.1.0"
+description = "Session and grid logic: identity + location + presence, independent of any UI or backend"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+lkng-identity = { path = "../lkng-identity" }
+lkng-location = { path = "../lkng-location" }
+lkng-presence = { path = "../lkng-presence" }
+lkng-profile = { path = "../lkng-profile" }
+lkng-transport = { path = "../lkng-transport" }
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+lkng-transport-mock = { path = "../lkng-transport-mock" }
+tokio = { version = "1", features = ["full"] }
