@@ -31,13 +31,19 @@ fn demo_grid() -> (Vec<Tile>, String) {
     let home = coverage.publish_target();
     let neighbour_cell = coverage.cells[1].clone();
 
-    let people: [(u8, &str, u64, bool); 6] = [
+    let people: [(u8, &str, u64, bool); 12] = [
         (10, "new in town, show me somewhere good", 900, true),
-        (11, "coffee?", 850, true),
-        (12, "up late, bad films", 800, true),
-        (13, "here for the weekend", 700, true),
+        (11, "coffee?", 890, true),
+        (12, "up late, bad films", 880, true),
+        (13, "here for the weekend", 870, true),
+        (16, "record shops and long walks", 860, true),
+        (17, "just moved, know nobody", 850, true),
+        (18, "gym then nothing", 840, true),
+        (19, "ask me about my cat", 830, true),
+        (20, "quiet one tonight", 820, true),
         (14, "next neighbourhood over", 990, false),
         (15, "walking the dog", 960, false),
+        (21, "cycling home", 950, false),
     ];
 
     let mut grid = Grid::new();

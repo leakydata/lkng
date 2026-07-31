@@ -470,3 +470,29 @@ feature-gated to be RNG-free — different target, different constraint).
 
 Delta already ships a Dioxus UI against `freenet_stdlib::client_api::WebApi`,
 so the pattern is proven in the ecosystem.
+
+## Grid UI running (2026-07-31)
+
+`web/` is a Dioxus app compiled to WASM, rendering tiles produced by
+`lkng-app`. Every tile in the demo grid is **genuinely signed and genuinely
+verified** by the same code path the network uses — only delivery is
+faked, so the interface can be developed with no node, no account and no
+network. Pointing it at `lkng-transport-freenet` swaps the data source and
+nothing else.
+
+Layout: **3 columns on phones, 4 above 560px**. Fixed counts rather than
+`auto-fill`, because the grid has to read as a wall of faces at a glance
+and a tile that stretches to 300px on a wide screen stops feeling like one.
+
+Three build notes worth keeping:
+
+- **Three `getrandom` majors reach a browser build** — 0.4 and 0.3
+  directly, 0.2 transitively via argon2/chacha20poly1305 on rand_core 0.6.
+  Each needs its own browser-backend feature (`wasm_js`, `wasm_js`, `js`)
+  or the wasm target refuses to compile. This is invisible until you try.
+- **`base_path` in Dioxus.toml 404s the root** under `dx serve`; remove it.
+- **A real overflow bug shipped to the browser and panicked the app**:
+  `u16::from(byte) * 360` overflows (255 × 360 = 91,800 > 65,535). It
+  panicked in debug — which is the good outcome; in release it would have
+  silently wrapped and produced wrong colours nobody would have traced.
+  Running the thing in an actual browser found it in one load.

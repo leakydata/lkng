@@ -7,3 +7,6 @@ dist/
 contracts/*/target/
 contracts/*/initial_state.bin
 contracts/*/cell_params.bin
+web/.playwright-mcp/
+web/target/
+.playwright-mcp/
