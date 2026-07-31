@@ -6,6 +6,7 @@ members = [
     "rust/lkng-presence",
     "rust/lkng-profile",
     "rust/lkng-transport",
+    "rust/lkng-transport-freenet",
     "rust/lkng-transport-mock",
 ]
 # NOTE: contracts/* are deliberately NOT workspace members — fdev requires

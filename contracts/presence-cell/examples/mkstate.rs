@@ -5,7 +5,7 @@ fn main() {
     // Deterministic demo seed. Real identities come from the platform
     // CSPRNG inside the identity delegate — never a fixed seed.
     let id = Identity::from_seed([42u8; 32]);
-    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20670 };
+    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20671 };
 
     let mut record = PresenceRecord {
         pseudonym: [0; 32], // filled in by sign_presence
