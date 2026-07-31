@@ -1,4 +1,4 @@
-use lkng_identity::{verify_presence, Identity};
+use lkng_identity::{verify_self_contained, Identity};
 use lkng_presence::{CellParams, CellState, PresenceRecord};
 
 fn main() {
@@ -18,8 +18,15 @@ fn main() {
     };
     id.sign_presence(&mut record, &params).expect("sign");
 
-    // Refuse to publish anything that doesn't verify.
-    verify_presence(&record, &params, &id.verifying_key_bytes()).expect("self-verify");
+    // Refuse to publish anything that doesn't verify — checked exactly the
+    // way a peer on the network will check it, against the epoch key the
+    // record carries rather than our durable identity.
+    verify_self_contained(&record, &params).expect("self-verify");
+    assert_ne!(
+        record.verifying_key.as_deref(),
+        Some(id.verifying_key_bytes().as_slice()),
+        "durable key must never be published"
+    );
 
     let mut cell = CellState::default();
     cell.insert(record);
@@ -28,7 +35,11 @@ fn main() {
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&cell, &mut buf).unwrap();
     std::fs::write("initial_state.bin", &buf).unwrap();
-    println!("state: {} bytes | handle: {} | sig: {} bytes",
-        buf.len(), id.fingerprint(),
-        cell.records.values().next().unwrap().sig.len());
+    println!(
+        "state: {} bytes | durable handle: {} | epoch handle: {} | sig: {} B",
+        buf.len(),
+        id.fingerprint(),
+        id.for_epoch(params.epoch).fingerprint(),
+        cell.records.values().next().unwrap().sig.len()
+    );
 }
