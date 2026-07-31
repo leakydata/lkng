@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "rust/lkng-location",
+    "rust/lkng-presence",
     "rust/lkng-transport",
     "rust/lkng-transport-mock",
 ]

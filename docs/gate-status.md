@@ -34,12 +34,19 @@ watch `fresh_from_node2`; then repeat during higher network load.
 
 ## Gate 2 — Android node
 
-- `freenet-core` pins Rust 1.94.0 (`rust-toolchain.toml`); the pinned
-  toolchain needs its own `aarch64-linux-android` std
+- **CROSS-COMPILE PASSES (2026-07-31): unmodified freenet-core 0.2.116
+  builds for `aarch64-linux-android` with ZERO code changes.** 4m46s build,
+  52 MB unstripped → **36 MB stripped** ELF PIE. No patches, no upstream
+  work needed for compilation — the plan's "may require upstream work"
+  risk did not materialize at this stage.
+- Recipe: `freenet-core` pins Rust 1.94.0 (`rust-toolchain.toml`); the
+  pinned toolchain needs its own Android std
   (`rustup target add aarch64-linux-android --toolchain 1.94.0`) — without
-  it every crate fails with a missing-std cascade.
-- NDK r27c clang as linker/CC/CXX (`aarch64-linux-android24-clang`),
-  `llvm-ar` as AR. Build of `-p freenet --release` in progress.
+  it every crate fails with a missing-std cascade. Then NDK r27c clang as
+  linker/CC/CXX (`aarch64-linux-android24-clang`), `llvm-ar` as AR.
+- Remaining half of the gate: run it **on a device** — child process from
+  an APK, app-private dirs, loopback bind, survive `am kill`. Needs
+  hardware or an emulator (and an x86_64 build for the latter).
 - **fdev bug found (affects any contract dev):** `fdev build` panics
   "Could not find workspace root" unless `CARGO_TARGET_DIR` is set — its
   fallback walks the *compile-time* `CARGO_MANIFEST_DIR` of fdev itself
