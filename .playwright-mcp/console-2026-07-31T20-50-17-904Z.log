@@ -1,0 +1,43 @@
+[    1742ms] [ERROR] panicked at src/main.rs:169:13:
+attempt to multiply with overflow
+
+Stack:
+
+Error
+    at http://127.0.0.1:8080/wasm/lkng-web.js:1098:25
+    at logError (http://127.0.0.1:8080/wasm/lkng-web.js:1954:18)
+    at __wbg_new_557b2c3ddb611852 (http://127.0.0.1:8080/wasm/lkng-web.js:1097:57)
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[18919]:0x2c3623
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[10498]:0x26a9a5
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[2734]:0x17e247
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[14081]:0x299c3f
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[2648]:0x1790e1
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[5941]:0x2060ef
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19327]:0x2c4b10
+
+ @ http://127.0.0.1:8080/wasm/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js:0
+[    1744ms] [ERROR] wasm-bindgen: imported JS function that was not marked as `catch` threw an error: unreachable
+
+Stack:
+RuntimeError: unreachable
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19622]:0x2c53e7
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19564]:0x2c52ed
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19071]:0x2c3f3d
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[2648]:0x17914f
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[5941]:0x2060ef
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19327]:0x2c4b10
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[14245]:0x29b87f
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[11191]:0x275270
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19083]:0x2c400b
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[1892]:0x1451b0 @ http://127.0.0.1:8080/wasm/snippets/dioxus-interpreter-js-20451f6aefec841d/src/js/patch_console.js:0
+[    1749ms] RuntimeError: unreachable
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19622]:0x2c53e7
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19564]:0x2c52ed
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19071]:0x2c3f3d
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[2648]:0x17914f
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[5941]:0x2060ef
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19327]:0x2c4b10
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[14245]:0x29b87f
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[11191]:0x275270
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[19083]:0x2c400b
+    at http://127.0.0.1:8080/wasm/lkng-web_bg.wasm:wasm-function[1892]:0x1451b0

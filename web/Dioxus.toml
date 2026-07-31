@@ -2,4 +2,4 @@
 name = "lkng"
 
 [web.app]
-base_path = "."
+title = "LKNG"

@@ -166,7 +166,9 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
 /// a grid before photo support lands. Deterministic per pseudonym, and it
 /// changes when the pseudonym rotates — which is the honest behaviour.
 fn swatch(pseudonym: &[u8; 32]) -> String {
-    let h = u16::from(pseudonym[0]) * 360 / 255;
+    // u32, not u16: 255 * 360 = 91_800 overflows a u16, which panics in
+    // debug and silently wraps in release — the worst kind of difference.
+    let h = u32::from(pseudonym[0]) * 360 / 255;
     let h2 = (h + 40) % 360;
     format!("linear-gradient(135deg, hsl({h} 55% 42%), hsl({h2} 45% 26%))")
 }
