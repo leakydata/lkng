@@ -399,3 +399,48 @@ each other's replies.
 
 That is the last piece of plumbing before a grid can be drawn: tiles now
 arrive pushed, not polled.
+
+## END TO END: two strangers met over Freenet (2026-07-31)
+
+`examples/two_strangers.rs` runs the entire product premise against the
+live network. Verbatim output:
+
+```
+alex publishes cell 9q8yy
+sam  publishes cell 9q8yy
+same cell: true  (they can discover each other)
+
+cell live: EyB2mhbXwyM6A8cJuyQEtzMHRbneSNZHRev4hNM83tD7
+alex posted the first tile
+
+alex's grid refreshed, live — 2 tiles:
+  ✓ "alex: new here" (verified)
+  ✓ "sam: also new here" (verified)
+
+scraper's view: 2 tiles, durable identities present: false
+  -> a scraper cannot reach either profile from these bytes
+
+sam revealed a profile at 7c88KiJCWBLJo6qMmbejkZxm4GaiBuCMD5CApVi38GS2 (handle BJJR7iojHFC)
+alex fetched and verified it: "sam" — revealed only after we matched
+```
+
+Every claim in PLAN.md's core loop is now demonstrated rather than
+asserted:
+
+- **Proximity without disclosure.** Two different true positions
+  (37.7749,-122.4194 and 37.7761,-122.4180), each jittered by a stable
+  per-user offset, land in the same level-5 cell `9q8yy`. Raw coordinates
+  never leave `lkng-location`; the cell string is the only location-derived
+  value that reaches the network, and no distance is ever computed.
+- **Discovery is live.** Alex's grid refreshed by push when sam's tile
+  merged — no polling.
+- **Every tile is verified**, in-contract and again by the client.
+- **The scraper check is empirical.** Scanning the actual bytes that
+  crossed the wire for either durable verifying key: absent. Harvesting
+  this cell yields two epoch pseudonyms and no route to either profile.
+- **Revelation is a choice.** Sam's profile only became reachable when sam
+  published it, and alex could only verify it holding sam's durable key —
+  obtained through the match, not through scraping.
+
+That is the privacy property the whole design exists for, working on
+mainnet, with no server in the path.
