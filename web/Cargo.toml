@@ -1,0 +1,20 @@
+[workspace]
+
+[package]
+name = "lkng-web"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+lkng-app = { path = "../rust/lkng-app" }
+lkng-identity = { path = "../rust/lkng-identity" }
+lkng-presence = { path = "../rust/lkng-presence" }
+ciborium = "0.2"
+dioxus = { version = "0.7", features = ["web"] }
+# Two getrandom majors reach this build: 0.3 directly, 0.2 transitively
+# (argon2/chacha20poly1305 via rand_core 0.6). Each needs its own browser
+# backend feature enabled or the wasm target refuses to compile.
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }

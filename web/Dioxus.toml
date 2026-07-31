@@ -1,0 +1,5 @@
+[application]
+name = "lkng"
+
+[web.app]
+base_path = "."
