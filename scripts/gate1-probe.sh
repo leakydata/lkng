@@ -24,16 +24,28 @@ OUT="$OUT_DIR/gate1-probe.csv"
 mkdir -p "$OUT_DIR"
 [ -f "$OUT" ] || echo "utc_iso,contract,label,http_code,time_total_s" >"$OUT"
 
-probe() { # $1=id $2=label
+probe_web() { # $1=id $2=label — webapp contracts via HTTP
   local code_time
   code_time=$(curl -s -o /dev/null -w "%{http_code},%{time_total}" \
     --max-time 120 "$NODE/v1/contract/web/$1/") || code_time="000,120"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),$1,$2,$code_time" >>"$OUT"
 }
 
+probe_state() { # $1=id $2=label — raw contracts via the client API
+  local start elapsed code
+  start=$(date +%s.%N)
+  if "$HOME/.local/bin/fdev" execute get "$1" -o /dev/null --timeout 120 >/dev/null 2>&1; then
+    code=200
+  else
+    code=000
+  fi
+  elapsed=$(echo "$(date +%s.%N) - $start" | bc)
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),$1,$2,$code,$elapsed" >>"$OUT"
+}
+
 echo "gate1-probe: every ${INTERVAL}s -> $OUT (ctrl-c to stop)"
 while true; do
-  probe "$BASELINE_ID" baseline_popular
-  [ -n "$EXTRA_ID" ] && probe "$EXTRA_ID" fresh_zero_subscriber
+  probe_web "$BASELINE_ID" baseline_popular
+  [ -n "$EXTRA_ID" ] && probe_state "$EXTRA_ID" fresh_zero_subscriber
   sleep "$INTERVAL"
 done
