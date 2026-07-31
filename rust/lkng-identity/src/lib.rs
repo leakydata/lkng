@@ -19,7 +19,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use lkng_presence::{CellParams, PresenceRecord};
-use ml_dsa::{EncodedVerifyingKey, MlDsa65, Signature, SigningKey, VerifyingKey};
+use ml_dsa::{MlDsa65, Signature, SigningKey};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -109,6 +109,7 @@ impl Identity {
         params: &CellParams,
     ) -> Result<(), IdentityError> {
         record.pseudonym = self.pseudonym();
+        record.verifying_key = Some(self.verifying_key_bytes());
         let payload = record.signing_payload(params)?;
         let sig: Signature<MlDsa65> = self
             .signing
@@ -187,37 +188,11 @@ impl Identity {
     }
 }
 
-/// Verify a presence record signed by `verifying_key_bytes`.
-pub fn verify_presence(
-    record: &PresenceRecord,
-    params: &CellParams,
-    verifying_key_bytes: &[u8],
-) -> Result<(), IdentityError> {
-    let enc: &EncodedVerifyingKey<MlDsa65> = verifying_key_bytes
-        .try_into()
-        .map_err(|_| IdentityError::BadKey)?;
-    let vk = VerifyingKey::<MlDsa65>::decode(enc);
-
-    // The pseudonym must match the key that signed, or a valid signature
-    // could be paraded under someone else's tile identity.
-    if record.pseudonym != *blake3::hash(verifying_key_bytes).as_bytes() {
-        return Err(IdentityError::BadSignature);
-    }
-
-    let sig_bytes: &ml_dsa::EncodedSignature<MlDsa65> = record
-        .sig
-        .as_slice()
-        .try_into()
-        .map_err(|_| IdentityError::BadSignature)?;
-    let sig = Signature::<MlDsa65>::decode(sig_bytes).ok_or(IdentityError::BadSignature)?;
-
-    let payload = record.signing_payload(params)?;
-    if vk.verify_with_context(&payload, SIGN_CONTEXT, &sig) {
-        Ok(())
-    } else {
-        Err(IdentityError::BadSignature)
-    }
-}
+/// Verify a presence record. Re-exported from `lkng-presence` so the
+/// contract (which compiles to wasm32 and cannot pull an RNG) and the
+/// client share exactly one implementation — divergence between the two
+/// would mean records that validate on one side and not the other.
+pub use lkng_presence::verify::{verify_record as verify_presence, verify_self_contained};
 
 /// Short handle from encoded verifying-key bytes.
 pub fn fingerprint_of(verifying_key_bytes: &[u8]) -> String {
@@ -291,6 +266,7 @@ mod tests {
             headline: "looking".into(),
             thumbnail: vec![9; 128],
             timestamp_ms: 1_785_523_000_000,
+            verifying_key: None,
             writer_cert: None,
             sig: vec![],
         }
