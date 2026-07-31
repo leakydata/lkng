@@ -25,4 +25,5 @@ freenet-main-contract = []
 trace = ["freenet-stdlib/trace"]
 
 [dev-dependencies]
+bs58 = "0.5"
 lkng-identity = { path = "../../rust/lkng-identity" }

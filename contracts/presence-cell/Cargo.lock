@@ -884,6 +884,7 @@ name = "presence-cell"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "bs58",
  "ciborium",
  "freenet-stdlib",
  "lkng-identity",

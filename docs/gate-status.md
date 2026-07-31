@@ -97,7 +97,8 @@ watch ring stability and state integrity.
 | Contract | ID | Notes |
 | --- | --- | --- |
 | hello-lkng | `DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT` | pipeline probe, Gate 1 series |
-| presence-cell (9q8yy, epoch 20666) | `8QoVUmp1jFtQ15UU8ejVBW6QitarLWyjkPQo9pVX9FFS` | first real grid cell; genesis record "first tile in the grid"; node2 fetch 0.7 s |
+| presence-cell v1 (unsigned) | `8QoVUmp1jFtQ15UU8ejVBW6QitarLWyjkPQo9pVX9FFS` | superseded — placeholder signatures |
+| **presence-cell v2 (signed, verifying)** | `BhoDpconffn4vLJPq4yBWtA4QguyZ856neMR4ddu3PMt` | cell 9q8yy epoch 20666; real ML-DSA-65 signature (3309 B); contract verifies every record in `validate_state`; node2 fetch 1.16 s, byte-identical, and the fetched bytes re-verify offline while REJECTING replay into another cell |
 
 ## Finding: UPDATE to cold contracts fails (2026-07-31)
 
