@@ -177,6 +177,11 @@ impl Identity {
     /// it).
     pub fn sign_profile(&self, body: ProfileBody) -> Result<ProfileState, IdentityError> {
         let params = self.profile_params();
+        // Always publish the encryption key. Leaving it to callers means
+        // one forgotten field makes an identity silently unmessageable,
+        // which is the kind of bug that looks like "nobody likes me".
+        let mut body = body;
+        body.encryption_key = Some(self.encryption_public_key().to_vec());
         let payload = body
             .signing_payload_current(&params)
             .map_err(|e| IdentityError::Encode(e.to_string()))?;
@@ -507,6 +512,7 @@ mod tests {
             tags: vec!["music".into()],
             photos: vec![],
             thumbnail: vec![1; 64],
+            encryption_key: None,
             sequence: 1,
         };
         let state = id.sign_profile(body).unwrap();
@@ -886,6 +892,73 @@ mod message_tests {
         assert!(
             lkng_inbox::verify::verify_state(&state, &mallory.inbox_params()).is_err(),
             "nobody else may mark your inbox read"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reachability_tests {
+    use super::*;
+
+    #[test]
+    fn signing_a_profile_always_publishes_the_encryption_key() {
+        let id = Identity::from_seed([31; 32]);
+        // Caller neglects the field entirely.
+        let state = id.sign_profile(ProfileBody {
+            display_name: "sam".into(),
+            encryption_key: None,
+            sequence: 1,
+            ..Default::default()
+        }).unwrap();
+        let published = state.body.as_ref().unwrap().encryption_key.clone();
+        assert_eq!(
+            published.as_deref(),
+            Some(id.encryption_public_key().as_slice()),
+            "an identity must never publish a profile nobody can write to"
+        );
+        verify_profile(&state, &id.profile_params()).unwrap();
+    }
+
+    #[test]
+    fn a_stranger_can_message_someone_from_their_profile_alone() {
+        // The full reachability path: alice has bob's profile and nothing
+        // else, and that must be sufficient.
+        let bob = Identity::from_seed([0xB0; 32]);
+        let alice = Identity::from_seed([0xA1; 32]);
+        let bob_profile = bob.sign_profile(ProfileBody {
+            display_name: "bob".into(),
+            encryption_key: None,
+            sequence: 1,
+            ..Default::default()
+        }).unwrap();
+
+        let body = bob_profile.body.as_ref().unwrap();
+        let enc: [u8; 32] = body.encryption_key.as_ref().unwrap()[..].try_into().unwrap();
+        let recipient_vk = bob.profile_params().owner_vk;
+
+        let env = alice
+            .seal_message(&enc, &recipient_vk, 20674, b"hi from your profile", 1)
+            .unwrap();
+        assert_eq!(bob.open_message(&env).unwrap(), b"hi from your profile");
+    }
+
+    #[test]
+    fn encryption_key_is_covered_by_the_profile_signature() {
+        // Swapping someone's encryption key would silently redirect their
+        // mail to an attacker, so it must be signed like everything else.
+        let bob = Identity::from_seed([0xB0; 32]);
+        let mallory = Identity::from_seed([0x77; 32]);
+        let mut state = bob.sign_profile(ProfileBody {
+            display_name: "bob".into(),
+            encryption_key: None,
+            sequence: 1,
+            ..Default::default()
+        }).unwrap();
+        state.body.as_mut().unwrap().encryption_key =
+            Some(mallory.encryption_public_key().to_vec());
+        assert!(
+            verify_profile(&state, &bob.profile_params()).is_err(),
+            "a swapped encryption key must break the signature"
         );
     }
 }

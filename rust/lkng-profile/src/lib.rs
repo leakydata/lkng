@@ -44,6 +44,7 @@ pub const MAX_PHOTOS: usize = 8;
 pub const MAX_THUMBNAIL_BYTES: usize = 16 * 1024;
 pub const MAX_SIG_BYTES: usize = 4096;
 pub const ML_DSA_65_VK_BYTES: usize = 1952;
+pub const X25519_KEY_BYTES: usize = 32;
 
 /// Contract parameters: who owns this profile. Part of `hash(code, params)`,
 /// so the address IS the identity — nobody else can occupy it.
@@ -83,6 +84,8 @@ pub enum ProfileError {
     MalformedSignature,
     #[error("owner key is not a valid ML-DSA-65 key")]
     BadOwnerKey,
+    #[error("encryption key must be 32 bytes (X25519)")]
+    BadEncryptionKey,
     #[error("signature verification failed")]
     VerificationFailed,
     #[error("state does not belong to the owner in the parameters")]
@@ -112,6 +115,14 @@ pub struct ProfileBody {
     /// a second fetch that might hit an evicted contract.
     #[serde(with = "serde_bytes")]
     pub thumbnail: Vec<u8>,
+    /// X25519 public key others use to seal messages to this identity.
+    ///
+    /// Published here rather than in a presence tile on purpose: a tile is
+    /// public to anyone scraping a cell, and an encryption key that
+    /// travelled with it would be one more durable handle to correlate.
+    /// You can only write to someone whose profile they chose to show you.
+    #[serde(default, with = "serde_bytes")]
+    pub encryption_key: Option<Vec<u8>>,
     /// Monotonic. Higher wins; ties break on content hash.
     pub sequence: u64,
 }
@@ -133,6 +144,11 @@ impl ProfileBody {
         if self.thumbnail.len() > MAX_THUMBNAIL_BYTES {
             return Err(ProfileError::ThumbnailTooLarge);
         }
+        if let Some(k) = &self.encryption_key {
+            if k.len() != X25519_KEY_BYTES {
+                return Err(ProfileError::BadEncryptionKey);
+            }
+        }
         Ok(())
     }
 
@@ -152,6 +168,7 @@ impl ProfileBody {
             tags: &'a [String],
             photos: &'a [PhotoRef],
             thumbnail: &'a [u8],
+            encryption_key: Option<&'a [u8]>,
             sequence: u64,
         }
         let scoped = Scoped {
@@ -163,6 +180,7 @@ impl ProfileBody {
             tags: &self.tags,
             photos: &self.photos,
             thumbnail: &self.thumbnail,
+            encryption_key: self.encryption_key.as_deref(),
             sequence: self.sequence,
         };
         let mut buf = Vec::new();
@@ -445,6 +463,7 @@ mod tests {
             tags: vec!["a".into()],
             photos: vec![],
             thumbnail: vec![1, 2, 3],
+            encryption_key: None,
             sequence: seq,
         }
     }

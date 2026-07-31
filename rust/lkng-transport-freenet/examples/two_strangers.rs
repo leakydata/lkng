@@ -149,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["p2p".into()],
         photos: vec![],
         thumbnail: vec![2u8; 64],
+        encryption_key: None,
         sequence: 1,
     })?;
     let pp_bytes = cbor(&profile_params);
