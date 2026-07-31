@@ -1,16 +1,33 @@
-use lkng_presence::{CellState, PresenceRecord};
+use lkng_identity::{verify_presence, Identity};
+use lkng_presence::{CellParams, CellState, PresenceRecord};
+
 fn main() {
-    let mut cell = CellState::default();
-    cell.insert(PresenceRecord {
-        pseudonym: *blake3::hash(b"lkng-genesis-pseudonym").as_bytes(),
-        headline: "first tile in the grid".into(),
-        thumbnail: vec![0u8; 64], // placeholder tile
-        timestamp_ms: 1_785_522_000_000,
+    // Deterministic demo seed. Real identities come from the platform
+    // CSPRNG inside the identity delegate — never a fixed seed.
+    let id = Identity::from_seed([42u8; 32]);
+    let params = CellParams { schema_v: 1, cell_id: "9q8yy".into(), epoch: 20666 };
+
+    let mut record = PresenceRecord {
+        pseudonym: [0; 32], // filled in by sign_presence
+        headline: "first signed tile in the grid".into(),
+        thumbnail: vec![0u8; 64],
+        timestamp_ms: 1_785_524_000_000,
         writer_cert: None,
-        sig: vec![1u8; 64], // placeholder sig (real ML-DSA lands with identity delegate)
-    });
+        sig: vec![],
+    };
+    id.sign_presence(&mut record, &params).expect("sign");
+
+    // Refuse to publish anything that doesn't verify.
+    verify_presence(&record, &params, &id.verifying_key_bytes()).expect("self-verify");
+
+    let mut cell = CellState::default();
+    cell.insert(record);
+    assert_eq!(cell.records.len(), 1, "signed record must satisfy state caps");
+
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&cell, &mut buf).unwrap();
     std::fs::write("initial_state.bin", &buf).unwrap();
-    println!("state: {} bytes, {} record(s)", buf.len(), cell.records.len());
+    println!("state: {} bytes | handle: {} | sig: {} bytes",
+        buf.len(), id.fingerprint(),
+        cell.records.values().next().unwrap().sig.len());
 }

@@ -13,6 +13,7 @@ lkng-presence = { path = "../../rust/lkng-presence" }
 blake3 = "1"
 ciborium = "0.2"
 serde = { version = "1", features = ["derive"] }
+lkng-identity = { path = "../../rust/lkng-identity" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
