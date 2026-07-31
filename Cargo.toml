@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
+members = ["contracts/hello-lkng",
     "rust/lkng-transport",
     "rust/lkng-transport-mock",
 ]
