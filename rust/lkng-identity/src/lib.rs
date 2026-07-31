@@ -28,6 +28,10 @@ use zeroize::Zeroize;
 /// signed payload — belt and braces, and free.
 pub const SIGN_CONTEXT: &[u8] = b"lkng/v1";
 
+/// Domain tag for per-epoch subkey derivation. Wire format — changing it
+/// orphans every existing epoch key.
+pub const EPOCH_KEY_DOMAIN: &[u8] = b"lkng/epoch-key/v1";
+
 /// Argon2id parameters for recovery-passphrase stretching.
 ///
 /// Deliberately expensive: the backup bundle is a public contract on the
@@ -100,10 +104,49 @@ impl Identity {
         *blake3::hash(&self.verifying_key_bytes()).as_bytes()
     }
 
+    /// Derive the throwaway identity used to sign presence for one epoch.
+    ///
+    /// **This is what makes pseudonym rotation mean anything.** A presence
+    /// record carries its verifying key inline so peers can validate it
+    /// without a lookup — which means that key is public to anyone scraping
+    /// a cell. If tiles were signed with the durable identity, a scraper
+    /// could take the key straight from a tile, derive the owner's profile
+    /// address, and pull the full profile: "revealed only after mutual
+    /// interaction" would be dead on arrival, and every tile would be
+    /// permanently linkable to one person across all cells and epochs.
+    ///
+    /// So tiles are signed by a per-epoch subkey derived here. BLAKE3's
+    /// keyed hash is a PRF, so holding one epoch key tells an attacker
+    /// nothing about any other epoch key or about the master seed. The
+    /// owner can always regenerate any epoch's key from the master.
+    ///
+    /// Linking an epoch key back to a durable profile is possible only
+    /// when its owner chooses to prove it, during the match handshake.
+    pub fn for_epoch(&self, epoch: u64) -> Identity {
+        let mut data = Vec::with_capacity(EPOCH_KEY_DOMAIN.len() + 8);
+        data.extend_from_slice(EPOCH_KEY_DOMAIN);
+        data.extend_from_slice(&epoch.to_le_bytes());
+        let sub = blake3::keyed_hash(&self.seed, &data);
+        Identity::from_seed(*sub.as_bytes())
+    }
+
     /// Sign a presence record for a specific cell and epoch, filling in
-    /// `pseudonym` and `sig`. The record cannot then be replayed into any
-    /// other cell or epoch.
+    /// `pseudonym`, `verifying_key` and `sig`.
+    ///
+    /// Always signs with the **epoch subkey** taken from `params.epoch` —
+    /// the durable identity key never appears in public state, and there is
+    /// no API to make it do so by accident.
     pub fn sign_presence(
+        &self,
+        record: &mut PresenceRecord,
+        params: &CellParams,
+    ) -> Result<(), IdentityError> {
+        self.for_epoch(params.epoch).sign_presence_raw(record, params)
+    }
+
+    /// Sign with *this* key directly. Private: the only caller is
+    /// [`Identity::sign_presence`], on an already-derived epoch key.
+    fn sign_presence_raw(
         &self,
         record: &mut PresenceRecord,
         params: &CellParams,
@@ -282,7 +325,9 @@ mod tests {
         assert_eq!(r.sig.len(), 3309, "ML-DSA-65 signature size");
         assert_eq!(id.verifying_key_bytes().len(), 1952, "ML-DSA-65 vk size");
         assert!(r.validate().is_ok(), "signed record must satisfy state caps");
-        verify_presence(&r, &p, &id.verifying_key_bytes()).unwrap();
+        // Verified against the key the record carries (the epoch subkey),
+        // which is exactly what a peer on the network can do.
+        verify_self_contained(&r, &p).unwrap();
     }
 
     #[test]
@@ -292,13 +337,12 @@ mod tests {
         let mut r = blank_record();
         id.sign_presence(&mut r, &params("9q8yy", 20666)).unwrap();
 
-        let vk = id.verifying_key_bytes();
         assert!(
-            verify_presence(&r, &params("dr5ru", 20666), &vk).is_err(),
+            verify_self_contained(&r, &params("dr5ru", 20666)).is_err(),
             "record must not verify in a different cell"
         );
         assert!(
-            verify_presence(&r, &params("9q8yy", 20667), &vk).is_err(),
+            verify_self_contained(&r, &params("9q8yy", 20667)).is_err(),
             "record must not verify in a different epoch"
         );
     }
@@ -310,7 +354,7 @@ mod tests {
         let mut r = blank_record();
         id.sign_presence(&mut r, &p).unwrap();
         r.headline = "different".into();
-        assert!(verify_presence(&r, &p, &id.verifying_key_bytes()).is_err());
+        assert!(verify_self_contained(&r, &p).is_err());
     }
 
     #[test]
@@ -320,9 +364,60 @@ mod tests {
         let p = params("9q8yy", 20666);
         let mut r = blank_record();
         alice.sign_presence(&mut r, &p).unwrap();
-        // Bob parades Alice's signed tile as his own identity.
-        r.pseudonym = bob.pseudonym();
-        assert!(verify_presence(&r, &p, &bob.verifying_key_bytes()).is_err());
+        // Bob parades Alice's signed tile under his own epoch identity.
+        let bob_epoch = bob.for_epoch(p.epoch);
+        r.pseudonym = bob_epoch.pseudonym();
+        r.verifying_key = Some(bob_epoch.verifying_key_bytes());
+        assert!(verify_self_contained(&r, &p).is_err());
+    }
+
+    #[test]
+    fn presence_never_exposes_the_durable_key() {
+        // The property the whole rotation scheme rests on: a scraper who
+        // harvests a tile must not learn the durable identity.
+        let id = Identity::from_seed([3; 32]);
+        let p = params("9q8yy", 20666);
+        let mut r = blank_record();
+        id.sign_presence(&mut r, &p).unwrap();
+
+        let published = r.verifying_key.clone().expect("key travels with record");
+        assert_ne!(
+            published,
+            id.verifying_key_bytes(),
+            "durable verifying key must never appear in public state"
+        );
+        assert_ne!(r.pseudonym, id.pseudonym());
+        // ...and the tile still verifies on its own terms.
+        verify_presence(&r, &p, &published).unwrap();
+    }
+
+    #[test]
+    fn epoch_keys_are_unlinkable_across_epochs() {
+        let id = Identity::from_seed([3; 32]);
+        let a = id.for_epoch(20666).verifying_key_bytes();
+        let b = id.for_epoch(20667).verifying_key_bytes();
+        assert_ne!(a, b, "each epoch must present a fresh key");
+        // Deterministic: the owner can re-derive to update their own tile.
+        assert_eq!(a, id.for_epoch(20666).verifying_key_bytes());
+    }
+
+    #[test]
+    fn different_users_derive_different_epoch_keys() {
+        let a = Identity::from_seed([1; 32]).for_epoch(20666).verifying_key_bytes();
+        let b = Identity::from_seed([2; 32]).for_epoch(20666).verifying_key_bytes();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn recovered_identity_regenerates_the_same_epoch_keys() {
+        // Recovery must restore the ability to update tiles already posted.
+        let id = Identity::from_seed([5; 32]);
+        let bundle = id.to_backup("passphrase", [1; 16]).unwrap();
+        let restored = Identity::from_backup(&bundle, "passphrase").unwrap();
+        assert_eq!(
+            id.for_epoch(20666).verifying_key_bytes(),
+            restored.for_epoch(20666).verifying_key_bytes()
+        );
     }
 
     #[test]
@@ -337,7 +432,7 @@ mod tests {
         let p = params("9q8yy", 20666);
         let mut r = blank_record();
         restored.sign_presence(&mut r, &p).unwrap();
-        verify_presence(&r, &p, &id.verifying_key_bytes()).unwrap();
+        verify_self_contained(&r, &p).unwrap();
     }
 
     #[test]
