@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 blake3 = "1"
 ciborium = "0.2"
+freenet-scaffold = "0.2.2"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 thiserror = { workspace = true }

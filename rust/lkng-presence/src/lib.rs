@@ -22,9 +22,29 @@
 //! `None` today) so AFT/Ghost-Key gating can arrive **without rotating the
 //! contract ID**.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use freenet_scaffold::ComposableState;
 use serde::{Deserialize, Serialize};
+
+/// Domain-separation tag for presence signatures. Borrowed from the
+/// ghostkey delegate's `ScopedPayload` discipline: *the raw payload is
+/// never signed alone*. Changing this invalidates every existing
+/// signature — it is wire format, not a constant to tidy.
+pub const SIG_DOMAIN: &[u8] = b"lkng/presence-record/v1";
+
+/// Which cell and epoch a state belongs to. These are the contract
+/// *parameters* (part of `hash(code, params)`, so each `(cell, epoch)` is
+/// its own contract), and they are ALSO covered by every record signature
+/// — see [`PresenceRecord::signing_payload`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellParams {
+    pub schema_v: u8,
+    /// Geohash level-5 cell id (see `lkng-location`).
+    pub cell_id: String,
+    /// Presence epoch index; see [`epoch_for_unix_time`].
+    pub epoch: u64,
+}
 
 /// Hard cap on records retained per cell. A flood evicts older genuine
 /// records (lossy, bounded blast radius) — the write-gate slot is the real
@@ -127,6 +147,51 @@ impl PresenceRecord {
             .map_err(|e| PresenceError::Encode(e.to_string()))?;
         Ok(*blake3::hash(&buf).as_bytes())
     }
+
+    /// The bytes a signature must cover.
+    ///
+    /// **This is a security boundary, not a serialization detail.** The
+    /// record's own fields do NOT identify which cell or epoch it belongs
+    /// to — those live in the contract parameters. Signing the record
+    /// alone would let anyone lift a valid record out of cell A and replay
+    /// it into cell B (or a future epoch), fabricating presence anywhere
+    /// on earth from one honestly-signed tile. Binding `(domain, cell_id,
+    /// epoch)` into the signed payload makes a signature valid **only** in
+    /// the contract it was minted for.
+    ///
+    /// The domain tag additionally stops a signature over some other LKNG
+    /// structure (a profile update, a message) from being reinterpreted as
+    /// a presence record — the cross-protocol confusion that the ghostkey
+    /// delegate's `ScopedPayload` wrapper exists to prevent.
+    pub fn signing_payload(&self, params: &CellParams) -> Result<Vec<u8>, PresenceError> {
+        #[derive(Serialize)]
+        struct Scoped<'a> {
+            domain: &'a [u8],
+            schema_v: u8,
+            cell_id: &'a str,
+            epoch: u64,
+            pseudonym: &'a [u8; 32],
+            headline: &'a str,
+            thumbnail: &'a [u8],
+            timestamp_ms: u64,
+            writer_cert: Option<&'a [u8]>,
+        }
+        let scoped = Scoped {
+            domain: SIG_DOMAIN,
+            schema_v: params.schema_v,
+            cell_id: &params.cell_id,
+            epoch: params.epoch,
+            pseudonym: &self.pseudonym,
+            headline: &self.headline,
+            thumbnail: &self.thumbnail,
+            timestamp_ms: self.timestamp_ms,
+            writer_cert: self.writer_cert.as_deref(),
+        };
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&scoped, &mut buf)
+            .map_err(|e| PresenceError::Encode(e.to_string()))?;
+        Ok(buf)
+    }
 }
 
 /// Retention key: newest first, content id as total-order tiebreak.
@@ -172,17 +237,14 @@ impl CellState {
     }
 
     /// Summary for delta sync: the set of record ids this peer holds.
-    pub fn summary(&self) -> std::collections::BTreeSet<RecordId> {
+    pub fn summary(&self) -> BTreeSet<RecordId> {
         self.records.keys().copied().collect()
     }
 
     /// Records the peer (per its summary) is missing. `None` when nothing —
     /// the contract MUST map that to zero bytes (Delta #5072), never an
     /// encoded empty vec.
-    pub fn delta_for(
-        &self,
-        peer_has: &std::collections::BTreeSet<RecordId>,
-    ) -> Option<Vec<PresenceRecord>> {
+    pub fn delta_for(&self, peer_has: &BTreeSet<RecordId>) -> Option<Vec<PresenceRecord>> {
         let missing: Vec<PresenceRecord> = self
             .records
             .iter()
@@ -197,7 +259,10 @@ impl CellState {
     }
 
     /// Apply a delta: insert each valid record, then truncate.
-    pub fn apply_delta(&mut self, records: Vec<PresenceRecord>) {
+    ///
+    /// Named distinctly from [`ComposableState::apply_delta`] so the two
+    /// never shadow each other at a call site.
+    pub fn apply_records(&mut self, records: Vec<PresenceRecord>) {
         for r in records {
             self.insert(r);
         }
@@ -222,6 +287,56 @@ impl CellState {
     }
 }
 
+/// Ecosystem-standard CRDT interface ([`freenet_scaffold::ComposableState`]).
+///
+/// LKNG's inherent methods above came out matching this trait almost
+/// field-for-field, which is a good sign — but implementing it explicitly
+/// buys two real things: `CellState` can be composed into a larger parent
+/// state by the `#[composable]` macro (as River composes its room state),
+/// and scaffold's `convergence` harness can exercise it.
+///
+/// `ParentState = Self`: a presence cell is a top-level contract state with
+/// no sibling fields to validate against. If a future revision nests it,
+/// this is the line that changes.
+impl ComposableState for CellState {
+    type ParentState = Self;
+    type Summary = BTreeSet<RecordId>;
+    type Delta = Vec<PresenceRecord>;
+    type Parameters = CellParams;
+
+    fn verify(&self, _parent: &Self::ParentState, _params: &Self::Parameters) -> Result<(), String> {
+        // Per-record invariants only — deliberately NOT a MAX_RECORDS check
+        // (Raven lesson: a transiently over-bound merged state is normal,
+        // and rejecting it breaks convergence).
+        self.validate().map_err(|e| e.to_string())
+    }
+
+    fn summarize(&self, _parent: &Self::ParentState, _params: &Self::Parameters) -> Self::Summary {
+        self.summary()
+    }
+
+    fn delta(
+        &self,
+        _parent: &Self::ParentState,
+        _params: &Self::Parameters,
+        old_summary: &Self::Summary,
+    ) -> Option<Self::Delta> {
+        self.delta_for(old_summary)
+    }
+
+    fn apply_delta(
+        &mut self,
+        _parent: &Self::ParentState,
+        _params: &Self::Parameters,
+        delta: &Option<Self::Delta>,
+    ) -> Result<(), String> {
+        if let Some(records) = delta {
+            CellState::apply_delta(self, records.clone());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +351,79 @@ mod tests {
             writer_cert: None,
             sig: vec![seed; 64],
         }
+    }
+
+    fn params(cell: &str, epoch: u64) -> CellParams {
+        CellParams { schema_v: 1, cell_id: cell.into(), epoch }
+    }
+
+    #[test]
+    fn signature_payload_binds_cell_and_epoch() {
+        // THE replay test: the same record signed for one cell must not
+        // produce the same signable bytes in another cell or epoch.
+        let r = rec(1, 100);
+        let sf = r.signing_payload(&params("9q8yy", 20666)).unwrap();
+        let other_cell = r.signing_payload(&params("dr5ru", 20666)).unwrap();
+        let other_epoch = r.signing_payload(&params("9q8yy", 20667)).unwrap();
+        assert_ne!(sf, other_cell, "record must not be replayable into another cell");
+        assert_ne!(sf, other_epoch, "record must not be replayable into another epoch");
+        // Deterministic for the same inputs.
+        assert_eq!(sf, r.signing_payload(&params("9q8yy", 20666)).unwrap());
+    }
+
+    #[test]
+    fn signature_payload_is_domain_separated() {
+        let r = rec(1, 100);
+        let p = r.signing_payload(&params("9q8yy", 20666)).unwrap();
+        assert!(
+            p.windows(SIG_DOMAIN.len()).any(|w| w == SIG_DOMAIN),
+            "domain tag must be inside the signed bytes"
+        );
+    }
+
+    #[test]
+    fn signature_payload_excludes_sig_but_covers_content() {
+        let a = rec(1, 100);
+        let mut b = a.clone();
+        b.sig = vec![99; 64]; // different signature, same content
+        let p = params("9q8yy", 20666);
+        assert_eq!(
+            a.signing_payload(&p).unwrap(),
+            b.signing_payload(&p).unwrap(),
+            "payload must not cover the sig field itself"
+        );
+        let mut c = a.clone();
+        c.headline = "tampered".into();
+        assert_ne!(
+            a.signing_payload(&p).unwrap(),
+            c.signing_payload(&p).unwrap(),
+            "payload must cover content"
+        );
+    }
+
+    #[test]
+    fn composable_state_matches_inherent_methods() {
+        let p = params("9q8yy", 20666);
+        let mut cell = CellState::default();
+        cell.insert(rec(1, 10));
+        cell.insert(rec(2, 20));
+        let parent = cell.clone();
+
+        assert_eq!(cell.summarize(&parent, &p), cell.summary());
+        assert!(cell.verify(&parent, &p).is_ok());
+
+        let mut empty = CellState::default();
+        let d = cell.delta(&parent, &p, &empty.summary());
+        assert!(d.is_some());
+        let empty_parent = empty.clone();
+        empty.apply_delta(&empty_parent, &p, &d).unwrap();
+        assert_eq!(empty, cell, "trait path reproduces the state");
+
+        // None delta is a no-op, not an error.
+        let before = empty.clone();
+        let bp = before.clone();
+        empty.apply_delta(&bp, &p, &None).unwrap();
+        assert_eq!(empty, before);
     }
 
     #[test]
