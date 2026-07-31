@@ -246,3 +246,66 @@ epoch key**, so holding someone's profile does not let you locate their
 tiles — and the tiles carry no durable key, so scraping a cell does not
 lead to the profile. The link exists in exactly one direction, only when
 its owner chooses to prove it.
+
+## BLOCKER: multi-writer contracts unusable from non-hosting nodes (2026-07-31)
+
+The earlier "cold-contract UPDATE fails" note now has a root cause, and it
+is worse than a papercut — it is an upstream regression that blocks LKNG's
+core write path.
+
+**Symptom.** `fdev execute update` fails `UPDATE failed: missing contract`
+while `GET` on the same key from the same node returns full state in <1 s.
+
+**Root cause.** The local node does not *host* the contract. `fdev
+diagnostics` after a successful publish and a successful 5582-byte GET:
+
+```
+📄 Contract States:
+| 6TUPTa5dCuCLBPjZGxuzW7BtYMDMD6BTChY13hcBE9sp | 0 | None |
+📊 Hosting contracts: 214
+```
+
+214 contracts hosted, 54 connections, subscription registered — and 0/None
+for the contract just published. `state_store.get(&key)` returns
+`MissingContract` (`executor_impl.rs:697-707`), so `drive_client_update`
+fails *before forwarding*. Per upstream #4071, the wire format carries a
+post-merge **full state**, not a delta, so the originator must merge
+locally first — which needs code and params it doesn't have.
+
+**This is a regression.** #4066 and #4071 describe exactly this and were
+both closed 2026-05-09; it reproduces on 0.2.116 (July 2026).
+
+**Ruled out** (none of these change the outcome): publishing with and
+without `--subscribe`; explicit `fdev execute subscribe` first (the
+subscription *does* register); `get --return-code` first; `--as-state`
+instead of a delta; a second independent node; immediate vs. delayed.
+
+### What it means for LKNG
+
+A node can only write to contracts it happens to host, and hosting follows
+**ring location**, not user interest. So a phone can publish its *own*
+contracts (profile, and the first tile in a cell) but cannot reliably
+append to a **shared** per-area presence cell — which is the mechanism
+discovery depends on.
+
+Reads are unaffected and remain fast. What is blocked is many users
+appending to one contract.
+
+**Status: OPEN — upstream dependency.** Draft issue with full repro at
+`docs/upstream-issues/01-update-non-hosting.md`. Fallback designs to
+evaluate if upstream can't land a fix in a useful timeframe:
+
+1. **Per-user tile contracts + an index.** Each user PUTs their own tile
+   at their own key (always allowed). Discovery needs an index, which has
+   the same write problem one level up — unless the index is per-user too
+   (each user publishes who they've seen) and clients union them.
+2. **Deterministic cell publisher.** Whichever node hosts the cell shard
+   accepts tiles over a side channel — reintroduces a coordinator, which
+   the project exists to avoid.
+3. **Wait.** River is multi-writer and works, so a supported path exists;
+   worth understanding exactly how River's room writes reach a hosting
+   node before designing around the bug.
+
+Option 3 first: read River's client write path before committing to a
+workaround. It is the strongest evidence that this is fixable rather than
+fundamental.
