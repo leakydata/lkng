@@ -45,6 +45,20 @@ pub const MAX_WRITER_CERT_BYTES: usize = 8192;
 /// a different record, which is fine for a grow-set).
 pub type RecordId = [u8; 32];
 
+/// Presence epoch length. Epoch rollover is the pruning mechanism (each
+/// `(cell, epoch)` is a separate contract), so this is also the maximum
+/// staleness of a "nearby" tile. 6 h balances contract churn against grid
+/// freshness; clients subscribe to the current and previous epoch so a
+/// rollover never empties the grid.
+pub const EPOCH_SECONDS: u64 = 6 * 60 * 60;
+
+/// Epoch index for a given unix time (seconds). Client-side only — the
+/// contract never reads a clock; the epoch it belongs to is pinned in its
+/// parameters.
+pub fn epoch_for_unix_time(unix_secs: u64) -> u64 {
+    unix_secs / EPOCH_SECONDS
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PresenceError {
     #[error("headline exceeds {MAX_HEADLINE_BYTES} bytes")]
@@ -222,6 +236,16 @@ mod tests {
             writer_cert: None,
             sig: vec![seed; 64],
         }
+    }
+
+    #[test]
+    fn epochs_partition_time() {
+        assert_eq!(epoch_for_unix_time(0), 0);
+        assert_eq!(epoch_for_unix_time(EPOCH_SECONDS - 1), 0);
+        assert_eq!(epoch_for_unix_time(EPOCH_SECONDS), 1);
+        // 2026-07-31T18:00:00Z
+        let e = epoch_for_unix_time(1_785_520_800);
+        assert_eq!(e, epoch_for_unix_time(1_785_520_800 + EPOCH_SECONDS - 1).saturating_sub(1) + 1);
     }
 
     #[test]
