@@ -1,0 +1,16 @@
+[package]
+name = "lkng-location"
+version = "0.1.0"
+description = "On-device location privacy: stable HKDF jitter + coarse geohash cells. Raw coordinates never leave this module."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+geohash = "0.13"
+hkdf = "0.12"
+sha2 = "0.10"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
