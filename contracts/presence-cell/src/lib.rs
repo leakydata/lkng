@@ -9,23 +9,15 @@
 
 use ciborium::{de::from_reader, ser::into_writer};
 use freenet_stdlib::prelude::*;
-use lkng_presence::{CellState, PresenceRecord, RecordId};
+use lkng_presence::{CellParams, CellState, PresenceRecord, RecordId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Contract parameters: which cell, which epoch. Part of `hash(code,
-/// params)` — any change is a different contract (deliberate: epoch
-/// rollover). `schema_v` exists so a future parameter change can be a
-/// planned migration rather than an accident.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CellParams {
-    pub schema_v: u8,
-    /// Geohash level-5 cell id (see lkng-location).
-    pub cell_id: String,
-    /// Presence epoch index (client-derived from wall time; the contract
-    /// never reads a clock).
-    pub epoch: u64,
-}
+// `CellParams` lives in `lkng-presence` because record signatures must
+// cover it (see `PresenceRecord::signing_payload`) — the parameters are a
+// security input, not just a contract-shell detail. Re-exported so callers
+// building parameters only need this crate.
+pub use lkng_presence::CellParams as Params;
 
 fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8], what: &str) -> Result<T, ContractError> {
     from_reader(bytes).map_err(|e| ContractError::Deser(format!("{what}: {e}")))
