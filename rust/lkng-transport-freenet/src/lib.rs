@@ -23,6 +23,7 @@
 //! before it ever updates — its own comments call this the "seed PUT".
 //! [`FreenetClient::seed`] does the same.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use freenet_stdlib::client_api::{ClientRequest, ContractRequest, HostResponse, WebApi};
@@ -211,5 +212,205 @@ impl FreenetClient {
             _ => None,
         })
         .await
+    }
+}
+
+/// Everything needed to seed a contract before writing to it: its compiled
+/// code and its parameters. Registered up-front by the app so the
+/// [`Transport`] impl can seed on demand without app code knowing that
+/// seeding exists.
+#[derive(Clone)]
+pub struct ContractSpec {
+    pub code: Vec<u8>,
+    pub params: Vec<u8>,
+}
+
+/// [`lkng_transport::Transport`] over a live Freenet node.
+///
+/// The trait is deliberately backend-agnostic — it knows nothing about
+/// seed PUTs, sessions or contract code. This adapter absorbs all of it:
+///
+/// * one [`FreenetClient`] session for the object's lifetime,
+/// * a registry of [`ContractSpec`]s so a `publish` to a key we have code
+///   for can seed first, automatically, exactly once per key.
+///
+/// The blob methods are intentionally unimplemented for now: media lands
+/// in Phase 4 and will use freenet-git's ChunkedPack rather than anything
+/// invented here. Failing loudly beats a plausible stub.
+pub struct FreenetTransport {
+    inner: tokio::sync::Mutex<Session>,
+}
+
+struct Session {
+    client: FreenetClient,
+    /// StateKey bytes -> everything we know about that contract. A
+    /// `ContractKey` carries both an instance id and a code hash, and the
+    /// instance id alone cannot reconstruct it — so the registry holds the
+    /// derived key rather than rebuilding it per call.
+    known: HashMap<Vec<u8>, Known>,
+    seeded: std::collections::HashSet<Vec<u8>>,
+}
+
+#[derive(Clone)]
+struct Known {
+    spec: ContractSpec,
+    key: ContractKey,
+}
+
+impl FreenetTransport {
+    pub async fn connect(url: &str, timeout: Duration) -> Result<Self> {
+        let client = FreenetClient::connect(url, timeout).await?;
+        Ok(Self {
+            inner: tokio::sync::Mutex::new(Session {
+                client,
+                known: HashMap::new(),
+                seeded: Default::default(),
+            }),
+        })
+    }
+
+    /// Register a contract's code and parameters, returning the
+    /// [`lkng_transport::StateKey`] app code should use from then on.
+    ///
+    /// Registration is mandatory, not an optimisation: an UPDATE requires
+    /// a seed PUT carrying the code, and a `ContractKey` cannot be rebuilt
+    /// from an instance id alone. Anything unregistered is rejected with a
+    /// message that says so, rather than failing later as
+    /// `missing contract`.
+    pub async fn register_contract(
+        &self,
+        code: Vec<u8>,
+        params: Vec<u8>,
+    ) -> lkng_transport::StateKey {
+        let key = FreenetClient::key_for(&code, &params);
+        let sk = lkng_transport::StateKey(key.id().as_bytes().to_vec());
+        self.inner.lock().await.known.insert(
+            sk.0.clone(),
+            Known { spec: ContractSpec { code, params }, key },
+        );
+        sk
+    }
+}
+
+impl Session {
+    fn lookup(&self, sk: &lkng_transport::StateKey) -> std::result::Result<Known, FreenetError> {
+        self.known.get(&sk.0).cloned().ok_or_else(|| {
+            FreenetError::Api(
+                "contract not registered — call register_contract(code, params) first".into(),
+            )
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl lkng_transport::Transport for FreenetTransport {
+    async fn publish(
+        &self,
+        key: &lkng_transport::StateKey,
+        delta: lkng_transport::Delta,
+    ) -> lkng_transport::Result<()> {
+        let mut s = self.inner.lock().await;
+        let known = s.lookup(key).map_err(to_transport_err)?;
+
+        // First write to a key seeds it; later writes are deltas. This is
+        // the whole reason the registry exists — app code just calls
+        // publish() and never learns that seeding is a thing.
+        if !s.seeded.contains(&key.0) {
+            s.client
+                .seed(&known.spec.code, &known.spec.params, delta.0.to_vec())
+                .await
+                .map_err(to_transport_err)?;
+            s.seeded.insert(key.0.clone());
+            // The seed PUT already carried this state.
+            return Ok(());
+        }
+        s.client
+            .update(&known.key, delta.0.to_vec())
+            .await
+            .map_err(to_transport_err)
+    }
+
+    async fn get(
+        &self,
+        key: &lkng_transport::StateKey,
+    ) -> lkng_transport::Result<lkng_transport::StateSnapshot> {
+        let mut s = self.inner.lock().await;
+        let known = s.lookup(key).map_err(to_transport_err)?;
+        let bytes = s
+            .client
+            .get(&known.key, false)
+            .await
+            .map_err(to_transport_err)?;
+        Ok(lkng_transport::StateSnapshot(bytes.into()))
+    }
+
+    async fn subscribe(
+        &self,
+        key: &lkng_transport::StateKey,
+    ) -> lkng_transport::Result<futures::stream::BoxStream<'static, lkng_transport::StateEvent>> {
+        let mut s = self.inner.lock().await;
+        let known = s.lookup(key).map_err(to_transport_err)?;
+        s.client
+            .subscribe(&known.key)
+            .await
+            .map_err(to_transport_err)?;
+        // Update notifications arrive on the shared session; routing them
+        // to per-key streams needs a demultiplexer that owns `recv`, which
+        // lands with the UI work. Until then a subscription is registered
+        // with the node (which is what keeps the contract hot) and callers
+        // poll via `get`.
+        Ok(Box::pin(futures::stream::empty()))
+    }
+
+    async fn put_blob(
+        &self,
+        _bytes: bytes::Bytes,
+    ) -> lkng_transport::Result<lkng_transport::ContentHash> {
+        Err(lkng_transport::TransportError::Unavailable(
+            "blob storage lands in Phase 4 (freenet-git ChunkedPack)".into(),
+        ))
+    }
+
+    async fn get_blob(
+        &self,
+        _hash: &lkng_transport::ContentHash,
+    ) -> lkng_transport::Result<bytes::Bytes> {
+        Err(lkng_transport::TransportError::Unavailable(
+            "blob storage lands in Phase 4 (freenet-git ChunkedPack)".into(),
+        ))
+    }
+
+    async fn sign(&self, _payload: &[u8]) -> lkng_transport::Result<lkng_transport::Signature> {
+        // Signing belongs to the identity delegate, which holds the key.
+        // Routing it through the transport would put key access on the
+        // network path — exactly the boundary the delegate exists to keep.
+        Err(lkng_transport::TransportError::Crypto(
+            "sign via lkng-identity / the identity delegate, not the transport".into(),
+        ))
+    }
+
+    async fn verify(
+        &self,
+        _payload: &[u8],
+        _signature: &lkng_transport::Signature,
+        _key: &lkng_transport::PublicKey,
+    ) -> lkng_transport::Result<bool> {
+        Err(lkng_transport::TransportError::Crypto(
+            "verify via lkng-presence::verify / lkng-profile::verify".into(),
+        ))
+    }
+}
+
+fn to_transport_err(e: FreenetError) -> lkng_transport::TransportError {
+    use lkng_transport::TransportError as T;
+    match e {
+        FreenetError::NotFound => T::NotFound,
+        FreenetError::Timeout(w) => T::Unavailable(format!("timed out waiting for {w}")),
+        FreenetError::Connect(m) => T::Unavailable(m),
+        FreenetError::Node(m) if m.contains("missing contract") => T::Rejected(format!(
+            "{m} — the contract was not seeded on this session; register() its code and params"
+        )),
+        FreenetError::Node(m) => T::Rejected(m),
+        FreenetError::Api(m) => T::Unavailable(m),
     }
 }

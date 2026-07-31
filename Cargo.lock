@@ -982,6 +982,7 @@ dependencies = [
  "lkng-identity",
  "lkng-presence",
  "lkng-transport",
+ "lkng-transport-mock",
  "thiserror",
  "tokio",
  "tokio-tungstenite",

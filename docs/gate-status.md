@@ -331,3 +331,38 @@ one-connection-per-invocation model makes multi-writer contracts appear
 broken, and the error message points at the contract rather than the
 session. Low severity now that the correct pattern is known — but it cost
 a day, and the next person deserves better.
+
+## Transport abstraction closed the loop (2026-07-31)
+
+`rust/lkng-transport-freenet` now implements `lkng_transport::Transport`,
+so application logic is genuinely backend-agnostic.
+`examples/backend_agnostic.rs` defines one `publish_tile()` — sign a
+record, publish, read back — and runs it unchanged against both backends:
+
+```
+mock backend:    published + read back 5564 bytes
+freenet backend: published + read back 5568 bytes
+```
+
+The function never mentions sessions, seed PUTs or contract code. Three
+design points made that possible:
+
+- **Registration is mandatory, not an optimisation.** `register_contract(code,
+  params)` returns the `StateKey` app code uses. An UPDATE needs a seed PUT
+  carrying the code, and a `ContractKey` (instance id + code hash) cannot
+  be rebuilt from an instance id alone — so the registry holds the derived
+  key. Unregistered keys fail with *"call register_contract first"* rather
+  than surfacing later as `missing contract`.
+- **First publish seeds, later ones update.** The adapter tracks which keys
+  it has seeded on this session and picks the right operation, so the
+  distinction never reaches app code.
+- **Signing is deliberately NOT implemented here.** `sign`/`verify` return
+  an error pointing at `lkng-identity` and the contract verifiers. Routing
+  signing through the transport would put key access on the network path —
+  precisely the boundary the identity delegate exists to hold.
+
+`subscribe` registers with the node (which is what keeps a contract hot)
+but returns an empty stream for now: fanning update notifications out to
+per-key streams needs a demultiplexer owning `recv`, which lands with the
+UI work. Blob methods fail loudly pending Phase 4's ChunkedPack — a
+plausible stub would be worse than an honest error.
