@@ -20,6 +20,7 @@ tracing = "0.1"
 [dev-dependencies]
 ciborium = "0.2"
 lkng-identity = { path = "../lkng-identity" }
+lkng-inbox = { path = "../lkng-inbox" }
 lkng-presence = { path = "../lkng-presence" }
 serde = { version = "1", features = ["derive"] }
 lkng-profile = { path = "../lkng-profile" }

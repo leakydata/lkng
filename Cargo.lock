@@ -1046,6 +1046,7 @@ dependencies = [
  "freenet-stdlib",
  "futures",
  "lkng-identity",
+ "lkng-inbox",
  "lkng-location",
  "lkng-presence",
  "lkng-profile",
