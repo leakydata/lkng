@@ -38,18 +38,31 @@ impl ContractInterface for Contract {
         state: State<'static>,
         _related: RelatedContracts<'static>,
     ) -> Result<ValidateResult, ContractError> {
-        // Parameters must decode (a mis-parameterized instance is dead on
-        // arrival, better loudly than quietly).
-        let _params: CellParams = decode(parameters.as_ref(), "params")?;
         if state.as_ref().is_empty() {
+            // Empty state still requires well-formed parameters.
+            let _: CellParams = decode(parameters.as_ref(), "params")?;
             return Ok(ValidateResult::Valid);
         }
+        let params: CellParams = decode(parameters.as_ref(), "params")?;
         let cell: CellState = decode(state.as_ref(), "state")?;
-        // Per-record invariants only. Deliberately NOT a MAX_RECORDS check —
+
+        // Per-record invariants. Deliberately NOT a MAX_RECORDS check —
         // transiently over-bound merged state is normal (Raven lesson #1).
         cell.validate()
-            .map(|_| ValidateResult::Valid)
-            .map_err(|e| ContractError::InvalidUpdateWithInfo { reason: e.to_string() })
+            .map_err(|e| ContractError::InvalidUpdateWithInfo { reason: e.to_string() })?;
+
+        // Every record self-verifies against the cell+epoch in the
+        // parameters. Without this the 500-record cap is a denial-of-service
+        // surface: anyone could fill a cell with well-formed unsigned junk
+        // and evict real people from the grid. Raven's index shard takes the
+        // same position — every entry is re-checked on every path into state.
+        for record in cell.records.values() {
+            lkng_presence::verify::verify_self_contained(record, &params)
+                .map_err(|e| ContractError::InvalidUpdateWithInfo {
+                    reason: format!("record failed verification: {e}"),
+                })?;
+        }
+        Ok(ValidateResult::Valid)
     }
 
     fn update_state(
@@ -132,6 +145,7 @@ mod tests {
             headline: format!("t{seed}"),
             thumbnail: vec![seed; 32],
             timestamp_ms: ts,
+            verifying_key: None,
             writer_cert: None,
             sig: vec![seed; 64],
         }
