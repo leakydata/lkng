@@ -1,9 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["contracts/hello-lkng",
+members = [
     "rust/lkng-transport",
     "rust/lkng-transport-mock",
 ]
+# NOTE: contracts/* are deliberately NOT workspace members — fdev requires
+# each contract to be its own workspace root (ecosystem convention: Mail and
+# Delta contracts each carry their own Cargo.lock).
+exclude = ["contracts"]
 
 [workspace.package]
 edition = "2021"
