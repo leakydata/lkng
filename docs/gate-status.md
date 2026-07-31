@@ -247,7 +247,7 @@ tiles — and the tiles carry no durable key, so scraping a cell does not
 lead to the profile. The link exists in exactly one direction, only when
 its owner chooses to prove it.
 
-## BLOCKER: multi-writer contracts unusable from non-hosting nodes (2026-07-31)
+## RESOLVED: multi-writer contracts work — one session + seed PUT (2026-07-31)
 
 The earlier "cold-contract UPDATE fails" note now has a root cause, and it
 is worse than a papercut — it is an upstream regression that blocks LKNG's
@@ -291,21 +291,43 @@ discovery depends on.
 Reads are unaffected and remain fast. What is blocked is many users
 appending to one contract.
 
-**Status: OPEN — upstream dependency.** Draft issue with full repro at
-`docs/upstream-issues/01-update-non-hosting.md`. Fallback designs to
-evaluate if upstream can't land a fix in a useful timeframe:
+### Resolution — it was never a core bug, it was `fdev`
 
-1. **Per-user tile contracts + an index.** Each user PUTs their own tile
-   at their own key (always allowed). Discovery needs an index, which has
-   the same write problem one level up — unless the index is per-user too
-   (each user publishes who they've seen) and clients union them.
-2. **Deterministic cell publisher.** Whichever node hosts the cell shard
-   accepts tiles over a side channel — reintroduces a coordinator, which
-   the project exists to avoid.
-3. **Wait.** River is multi-writer and works, so a supported path exists;
-   worth understanding exactly how River's room writes reach a hosting
-   node before designing around the bug.
+Reading River's `room_synchronizer.rs` gave the answer. River does not
+merely subscribe before writing; on joining a room it issues a
+`ContractRequest::Put` carrying the **contract code + parameters + state**
+with `subscribe: true` — its own comments call this the "seed PUT" — and
+it does so over a **single long-lived `WebApi` session** that then carries
+every later GET, SUBSCRIBE and UPDATE.
 
-Option 3 first: read River's client write path before committing to a
-workaround. It is the strongest evidence that this is fixable rather than
-fundamental.
+`fdev` cannot reproduce that: **every `fdev execute …` invocation opens a
+fresh WebSocket**. Publish in one process and update in the next, and the
+second session has no seeded contract to merge against — hence
+`missing contract`.
+
+**Confirmed working.** `rust/lkng-transport-freenet` opens one session,
+seed-PUTs, then updates:
+
+```
+connected (one session for everything)
+seed PUT ok: 3fWWKKoRC9Y2JTtLcJ8cwT8mT5Gu7HGRsDGt1NtWhkSf
+state before update: 5582 bytes
+UPDATE ACCEPTED — state now 11157 bytes (was 5582)
+>>> WRITE PATH WORKS: a second author's record merged in
+```
+
+Two independent identities now hold tiles in one shared cell. Fetched from
+the **non-publisher** node: 11157 bytes, both records verify, and both
+still reject replay into another cell. Repeat runs stay at 11157 bytes —
+idempotent re-application, exactly as the grow-set requires.
+
+**Implication for LKNG:** the phone client must hold one persistent
+WebSocket to its local node for the app's lifetime (which the foreground
+service was going to do anyway) and seed-PUT any cell before writing to
+it. No architectural change, no coordinator, no fallback design needed.
+
+The upstream draft is retargeted at the real defect: `fdev`'s
+one-connection-per-invocation model makes multi-writer contracts appear
+broken, and the error message points at the contract rather than the
+session. Low severity now that the correct pattern is known — but it cost
+a day, and the next person deserves better.

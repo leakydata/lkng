@@ -1,100 +1,67 @@
-# UPDATE still fails with "missing contract" from a non-hosting node on 0.2.116 (regression of #4066 / #4071)
+# `fdev execute update` cannot work on contracts the node doesn't host, because each invocation is a new session
 
 ## Summary
 
-On `freenet 0.2.116` (release binary, network mode, connected to public
-gateways), a client-initiated `Update` for a contract the local node does
-**not** host fails with:
+`fdev execute update <key> <delta>` fails with `UPDATE failed: missing
+contract: <key>` for any contract the local node does not already host —
+even immediately after `fdev publish --subscribe` of that same contract,
+and even though `fdev execute get` on the same key returns full state in
+under a second.
 
-```
-UPDATE failed: missing contract: <key>
-```
+The same operation succeeds reliably through the client API when PUT and
+UPDATE share **one WebSocket session**. So this is not a core defect; it is
+a gap in `fdev`'s process model plus an error message that points at the
+wrong thing.
 
-`GET` for the same key succeeds from the same node in under a second and
-returns full state. `GET --return-code` also succeeds but does **not**
-populate the local store, so the subsequent `UPDATE` fails identically.
+## Cause
 
-This is the behaviour described in #4066 ("Get-with-subscribe +
-return_contract_code doesn't reliably populate caller's local store") and
-#4071 ("UPDATE from non-hosting originator returns 'missing contract
-parameters' instead of self-healing"), both closed 2026-05-09. It
-reproduces on a single node against the live network.
+An UPDATE is applied locally before forwarding (the wire format carries a
+post-merge full state, not a raw delta — per the analysis in #4071), so the
+originator needs the contract's code and parameters in its own store.
+River seeds exactly that with a `ContractRequest::Put` carrying code +
+params + state and `subscribe: true`, over a long-lived `WebApi` that then
+serves every subsequent request.
+
+`fdev` opens a **fresh WebSocket per invocation**, so `fdev publish` and
+the following `fdev execute update` are different sessions and the second
+one has nothing seeded.
 
 ## Reproduction
 
-Contract: a small anyone-writes grow-set (state is a CBOR map of
-content-addressed records), parameters are a CBOR struct. Nothing exotic —
-no related contracts, ~5.5 KB state, ~5.5 KB delta.
+Fails:
 
 ```bash
-# 1. publish, subscribing on the way in
-fdev publish --code presence_cell.wasm --parameters cell_params.bin \
-             --subscribe contract --state initial_state.bin
-# -> "Contract published successfully, response_key: 6TUPTa5dCuC..."
-
-# 2. immediately update (no delay, no restart)
-fdev execute update 6TUPTa5dCuC... delta.bin --timeout 120
-# -> Error: UPDATE failed: missing contract: 6TUPTa5dCuC...
+fdev publish --code c.wasm --parameters p.bin --subscribe contract --state s.bin
+fdev execute update <key> delta.bin        # missing contract
 ```
 
-Variations that make no difference:
-
-- publishing **with** and **without** `--subscribe`
-- an explicit `fdev execute subscribe` first (the subscription *does*
-  appear in `fdev diagnostics` under "Subscriptions")
-- `fdev execute get --return-code` first (returns 5582 bytes successfully)
-- `--as-state` instead of a delta
-- issuing the UPDATE from a second node on the same host (separate
-  config/data dirs and ports)
-- waiting minutes vs. issuing immediately after publish
-
-## The telling diagnostic
-
-Right after a successful publish and a successful 5582-byte GET:
+Succeeds — same node, same contract, same bytes, one session:
 
 ```
-📋 Subscriptions:
-| E4SWQ7188dkvuohrfTfjohn5YLQyoHC4j6utj85j2xgj | 799000002 |
-
-📄 Contract States:
-| 6TUPTa5dCuCLBPjZGxuzW7BtYMDMD6BTChY13hcBE9sp | 0           | None    |
-
-📊 System Metrics:
-  Active connections: 54
-  Hosting contracts: 214
+connected (one session for everything)
+seed PUT ok: 3fWWKKoRC9Y2JTtLcJ8cwT8mT5Gu7HGRsDGt1NtWhkSf
+state before update: 5582 bytes
+UPDATE ACCEPTED — state now 11157 bytes (was 5582)
 ```
 
-The node holds 214 contracts, is well connected, is subscribed — and
-reports **0 / None** for the contract it just published and can read.
-`state_store.get(&key)` then returns `MissingContract`
-(`crates/core/src/contract/executor/runtime/executor_impl.rs:697-707`),
-so `drive_client_update` fails before forwarding.
+(~90 lines of `freenet-stdlib` client API; happy to share the harness.)
 
-## Why this is load-bearing
+## Suggestions
 
-Per #4071's own analysis, the wire format
-`UpdateMsg::RequestUpdate.value: WrappedState` carries a **post-merge full
-state**, not a delta, so the originator must merge locally before
-forwarding — which requires the contract's code and params locally.
-
-The practical consequence is that **a node can only write to contracts it
-happens to host**, and hosting follows ring location rather than user
-interest. For any app with a shared multi-writer contract — a chat room, an
-index, a per-area shard — a given client's ability to write to it is
-effectively arbitrary.
-
-We hit this building a geosocial app where discovery is a shared
-per-area contract that many nearby users append to. Reads work perfectly;
-writes work only from whichever node happens to host the shard.
+1. **Error message.** `missing contract: <key>` reads as "this contract
+   doesn't exist", which sends you hunting eviction, propagation and
+   subscription. Something like *"contract not in local store — PUT it
+   with code and parameters on this session before updating"* would have
+   saved a day.
+2. **`fdev execute update --seed <code> --parameters <params>`**, doing the
+   seed PUT and the UPDATE on one connection, so the CLI can express the
+   only pattern that works.
+3. **Docs.** The seed-PUT requirement is discoverable today only by reading
+   River's `room_synchronizer.rs`. A line in the contract docs saying "to
+   update a contract your node does not host, first PUT code + params +
+   state on the same session" would make multi-writer contracts approachable.
 
 ## Environment
 
-- `freenet 0.2.116 (1b3bf6cab018)`, `fdev 0.3.278`, stdlib `0.8.5`
-- Linux x86_64, network mode, 54 active connections, node location 0.066278
-- Reproduced from two independent nodes on the same host, and immediately
-  after publish on the publishing node itself
-
-## Happy to help
-
-We have a minimal contract and scripted repro and can run any diagnostic
-build or patch against the live network — just say what would be useful.
+`freenet 0.2.116 (1b3bf6cab018)`, `fdev 0.3.278`, stdlib `0.8.5`, Linux
+x86_64, network mode, 54 connections. Related: #4066, #4071.

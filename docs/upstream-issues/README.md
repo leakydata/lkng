@@ -13,6 +13,6 @@ gh issue create --repo freenet/freenet-core \
 
 | Draft | Repo | Severity |
 | --- | --- | --- |
-| `01-update-non-hosting.md` | freenet-core | **High** — blocks multi-writer contracts for LKNG |
+| `01-update-non-hosting.md` | freenet-core | Low — fdev UX + error message; correct pattern found |
 | `02-fdev-workspace-root.md` | freenet-core | Low — papercut, one-line workaround |
 | `03-license-request.md` | harvest, ghostkeys | Low — patterns usable, code isn't |
