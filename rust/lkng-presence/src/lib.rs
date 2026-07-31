@@ -59,6 +59,8 @@ pub const MAX_THUMBNAIL_BYTES: usize = 16 * 1024;
 pub const MAX_SIG_BYTES: usize = 4096;
 /// Reserved writer-cert slot cap.
 pub const MAX_WRITER_CERT_BYTES: usize = 8192;
+/// Encoded ML-DSA-65 verifying key length (FIPS 204).
+pub const ML_DSA_65_VK_BYTES: usize = 1952;
 
 /// Content id: BLAKE3 of the record's canonical bytes (sans nothing — the
 /// whole record, signature included, is the identity: a re-signed record is
@@ -89,8 +91,12 @@ pub enum PresenceError {
     BadSignature,
     #[error("writer cert exceeds {MAX_WRITER_CERT_BYTES} bytes")]
     WriterCertTooLarge,
+    #[error("verifying key is not a valid ML-DSA-65 key")]
+    BadVerifyingKey,
     #[error("encode: {0}")]
     Encode(String),
+    #[error("signature verification failed")]
+    VerificationFailed,
 }
 
 /// One grid tile: everything a peer needs to render it, self-contained.
@@ -110,6 +116,12 @@ pub struct PresenceRecord {
     /// can lie); used ONLY as the retention ordering key, where lying
     /// forward merely evicts you sooner from someone else's cap.
     pub timestamp_ms: u64,
+    /// The signer's encoded ML-DSA-65 verifying key (1952 B). Carried
+    /// inline so the record is **self-contained** (River #145): a peer that
+    /// has never seen this pseudonym can still validate the tile without a
+    /// second lookup that might silently fail.
+    #[serde(default, with = "serde_bytes")]
+    pub verifying_key: Option<Vec<u8>>,
     /// RESERVED write-gating slot (AFT token / Ghost Key cert). Always
     /// `None` in v1; validated for size so a future value can't bloat state.
     #[serde(default, with = "serde_bytes")]
@@ -135,6 +147,11 @@ impl PresenceRecord {
         if let Some(cert) = &self.writer_cert {
             if cert.len() > MAX_WRITER_CERT_BYTES {
                 return Err(PresenceError::WriterCertTooLarge);
+            }
+        }
+        if let Some(vk) = &self.verifying_key {
+            if vk.len() != ML_DSA_65_VK_BYTES {
+                return Err(PresenceError::BadVerifyingKey);
             }
         }
         Ok(())
@@ -175,6 +192,7 @@ impl PresenceRecord {
             thumbnail: &'a [u8],
             timestamp_ms: u64,
             writer_cert: Option<&'a [u8]>,
+            verifying_key: Option<&'a [u8]>,
         }
         let scoped = Scoped {
             domain: SIG_DOMAIN,
@@ -186,6 +204,7 @@ impl PresenceRecord {
             thumbnail: &self.thumbnail,
             timestamp_ms: self.timestamp_ms,
             writer_cert: self.writer_cert.as_deref(),
+            verifying_key: self.verifying_key.as_deref(),
         };
         let mut buf = Vec::new();
         ciborium::ser::into_writer(&scoped, &mut buf)
@@ -287,6 +306,77 @@ impl CellState {
     }
 }
 
+/// In-contract signature verification.
+///
+/// This lives here rather than in `lkng-identity` because the **contract**
+/// needs it and must compile to `wasm32-unknown-unknown`: signing and key
+/// generation drag in an RNG (`getrandom`), which that target rejects, but
+/// *verification* needs no randomness at all. `lkng-identity` re-exports
+/// these for client use.
+///
+/// Verifying inside the contract is what keeps garbage out of state. The
+/// record cap is 500; without this, anyone could fill a cell with
+/// well-formed-but-unsigned junk and evict real people from the grid.
+/// Raven's index shard takes the same position — every entry self-verifies
+/// on every path that can enter state.
+#[cfg(feature = "verify")]
+pub mod verify {
+    use super::*;
+    use ml_dsa::{EncodedSignature, EncodedVerifyingKey, MlDsa65, Signature, VerifyingKey};
+
+    /// Context tag for ML-DSA's own context parameter — a second layer of
+    /// domain separation beneath [`SIG_DOMAIN`]. Must match the signer.
+    pub const SIGN_CONTEXT: &[u8] = b"lkng/v1";
+
+    /// Verify one record against `params` and an encoded verifying key.
+    pub fn verify_record(
+        record: &PresenceRecord,
+        params: &CellParams,
+        verifying_key_bytes: &[u8],
+    ) -> Result<(), PresenceError> {
+        // The pseudonym must be the hash of the key that signed, or a valid
+        // signature could be paraded under someone else's tile identity.
+        if record.pseudonym != *blake3::hash(verifying_key_bytes).as_bytes() {
+            return Err(PresenceError::VerificationFailed);
+        }
+        let enc: &EncodedVerifyingKey<MlDsa65> = verifying_key_bytes
+            .try_into()
+            .map_err(|_| PresenceError::VerificationFailed)?;
+        let vk = VerifyingKey::<MlDsa65>::decode(enc);
+
+        let sig_bytes: &EncodedSignature<MlDsa65> = record
+            .sig
+            .as_slice()
+            .try_into()
+            .map_err(|_| PresenceError::VerificationFailed)?;
+        let sig =
+            Signature::<MlDsa65>::decode(sig_bytes).ok_or(PresenceError::VerificationFailed)?;
+
+        let payload = record.signing_payload(params)?;
+        if vk.verify_with_context(&payload, SIGN_CONTEXT, &sig) {
+            Ok(())
+        } else {
+            Err(PresenceError::VerificationFailed)
+        }
+    }
+
+    /// Verify a record that carries its own verifying key inline.
+    ///
+    /// A presence record is *self-contained* (River #145): a peer that has
+    /// never seen this pseudonym must still be able to validate the tile,
+    /// so the key travels with it.
+    pub fn verify_self_contained(
+        record: &PresenceRecord,
+        params: &CellParams,
+    ) -> Result<(), PresenceError> {
+        let vk = record
+            .verifying_key
+            .as_deref()
+            .ok_or(PresenceError::VerificationFailed)?;
+        verify_record(record, params, vk)
+    }
+}
+
 /// Ecosystem-standard CRDT interface ([`freenet_scaffold::ComposableState`]).
 ///
 /// LKNG's inherent methods above came out matching this trait almost
@@ -348,6 +438,7 @@ mod tests {
             headline: format!("hi from {seed}"),
             thumbnail: vec![seed; 64],
             timestamp_ms: ts,
+            verifying_key: None,
             writer_cert: None,
             sig: vec![seed; 64],
         }
@@ -446,7 +537,7 @@ mod tests {
         assert_eq!(r.validate(), Err(PresenceError::ThumbnailTooLarge));
         let mut r = rec(1, 10);
         r.sig = vec![];
-        assert_eq!(r.validate(), Err(PresenceError::BadSignature));
+        assert_eq!(r.validate(), Err(PresenceError::VerificationFailed));
     }
 
     #[test]

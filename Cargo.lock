@@ -632,6 +632,7 @@ dependencies = [
  "blake3",
  "ciborium",
  "freenet-scaffold",
+ "ml-dsa",
  "proptest",
  "serde",
  "serde_bytes",
