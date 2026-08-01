@@ -1056,3 +1056,58 @@ before anyone but us holds data worth keeping.
 
 Guidance worth repeating verbatim: *"Read it before your second release,
 and design for it before your first."*
+
+## Keystore-sealed identity (2026-08-01) — built, not yet confirmed on device
+
+`KeyVault.kt` seals the identity seed with a non-exportable AES-GCM key in
+the Android Keystore and exposes exactly three methods to the WebView
+(`get`, `put`, `isSealed`) — no paths, no URLs, nothing that becomes a
+general capability. The web side prefers the vault and falls back to
+`localStorage` only where the bridge is absent (desktop development).
+
+**What it does and does not protect.** Copying app storage now yields
+ciphertext that opens nowhere else, and the wrapping key cannot be
+extracted even by this app. Script running inside our own WebView can
+still ask the vault to unseal, because the seed has to reach the WASM
+crypto — closing that means moving all signing behind the bridge so the
+seed never crosses it. That is the right end state and a much bigger
+change. Stated in the class doc rather than implied.
+
+Two deliberate refusals:
+
+- `setUserAuthenticationRequired(false)` — the node must sign presence
+  while the screen is off, and a key needing a fingerprint every epoch
+  would make the app silently stop working in a pocket.
+- The method is `isSealed()`, not `isHardwareBacked()`. `KeyInfo`
+  introspection varies by API level and vendor, and claiming hardware
+  backing on a device where it is absent would be worse than claiming
+  nothing. The UI says "sealed by this device's keystore", which is
+  checkable.
+
+### A migration bug worth remembering
+
+The first version had `vault_get` fall back to `localStorage`, which
+**succeeded** for any install that already had a seed — so `put` was never
+called and the vault stayed empty. The security fix would have applied
+only to people who installed after it, leaving existing users (whose keys
+had been exposed longest) on web storage forever. Now a fallback read
+migrates: seal into the vault, and only remove the plaintext copy once the
+sealed one is confirmed stored, because losing the seed is losing the
+account.
+
+### Also fixed: the WebView was caching the self-updating UI
+
+The UI ships over Freenet at a URL that never changes while its content
+does, so HTTP caching pinned the app to whatever version it first loaded —
+**including past a security fix**. `LOAD_NO_CACHE` plus `clearCache` on
+start; the content comes from loopback, so caching bought nothing anyway.
+
+### Status: unconfirmed on device
+
+After all of the above, `shared_prefs/lkng.vault.xml` is still not being
+created on the test phone, so the seal has **not** been observed working
+end to end. The node is healthy and the app runs, so the likely causes are
+the published UI not yet having reached that phone's node, or the bridge
+not being reachable from inside the node's sandbox iframe. Until this is
+confirmed, **the release blocker stands** — the code is right but unproven,
+and an unproven security control is not one.
