@@ -161,3 +161,12 @@ main { padding: 12px; max-width: 720px; margin: 0 auto; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+.dot.off { background: #7a7f8a; box-shadow: 0 0 0 3px rgba(122, 127, 138, .14); }
+.warn {
+  margin-top: 14px; padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(208, 69, 90, .1);
+  border: 1px solid rgba(208, 69, 90, .3);
+  color: var(--muted); font-size: 12.5px;
+}

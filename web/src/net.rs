@@ -14,7 +14,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use freenet_stdlib::client_api::{ClientRequest, ContractRequest, ContractResponse, HostResponse, WebApi};
+use freenet_stdlib::client_api::{
+    ClientError, ClientRequest, ContractRequest, ContractResponse, HostResponse, WebApi,
+};
 use freenet_stdlib::prelude::{
     ContractCode, ContractContainer, ContractInstanceId, ContractKey, ContractWasmAPIVersion,
     Parameters, RelatedContracts, StateDelta, UpdateData, WrappedContract, WrappedState,
@@ -94,7 +96,7 @@ impl Node {
 
         let web_api = WebApi::start(
             socket,
-            move |result: freenet_stdlib::client_api::HostResult| {
+            move |result: Result<HostResponse, ClientError>| {
                 let mut i = r_inbox.borrow_mut();
                 match result {
                     Ok(HostResponse::ContractResponse(cr)) => absorb(&mut i, cr),

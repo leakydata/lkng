@@ -96,8 +96,12 @@ impl Coverage {
 }
 
 /// A user session: identity, privacy setting, and the local block list.
+///
+/// Cloneable so UI frameworks can hold it in several places; the identity
+/// is shared rather than duplicated, so key material still exists once.
+#[derive(Clone)]
 pub struct Session {
-    identity: Identity,
+    identity: std::sync::Arc<Identity>,
     /// Device-local secret for jitter derivation. Never leaves the device;
     /// resetting it re-enables the averaging attack, so it is created once.
     jitter_secret: [u8; 32],
@@ -108,7 +112,7 @@ pub struct Session {
 impl Session {
     pub fn new(identity: Identity, jitter_secret: [u8; 32], privacy: Privacy) -> Self {
         Self {
-            identity,
+            identity: std::sync::Arc::new(identity),
             jitter_secret,
             privacy,
             blocked: HashSet::new(),

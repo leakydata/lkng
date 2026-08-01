@@ -1,36 +1,63 @@
 //! LKNG grid UI.
 //!
 //! Rendering and event wiring only — every decision about *what* appears
-//! lives in `lkng-app` where it is unit-tested. If a rule starts creeping
+//! lives in `lkng-app`, where it is unit-tested. If a rule starts creeping
 //! into this file, it belongs down there instead.
 //!
-//! This build runs against a seeded in-memory grid so the interface can be
-//! developed and reviewed with no node, no network and no account. Wiring
-//! it to `lkng-transport-freenet` swaps the data source and nothing else.
+//! The grid runs in one of two modes, chosen automatically:
+//!
+//! * **Live** when a Freenet node answers on the client API — tiles come
+//!   from the cells around you and are pushed as they change.
+//! * **Demo** otherwise, so the interface can be built and reviewed with
+//!   no node, no account and no network. Demo tiles are still genuinely
+//!   signed and genuinely verified; only delivery is faked.
+
+mod net;
 
 use dioxus::prelude::*;
-use lkng_app::{Grid, Privacy, Session, Tile};
+use lkng_app::{Coverage, Grid, Privacy, Session, Tile, SCHEMA_V};
 use lkng_identity::Identity;
-use lkng_presence::CellState;
+use lkng_presence::{CellParams, CellState};
+use net::{Node, Status};
 
 const CSS: Asset = asset!("/assets/lkng.css");
+
+/// Compiled presence-cell contract, embedded so the client can seed a cell
+/// it does not host. Without the code travelling with the PUT there is no
+/// way to write to a shared cell at all.
+const CELL_WASM: &[u8] = include_bytes!(
+    "../../contracts/presence-cell/target/wasm32-unknown-unknown/release/presence_cell.wasm"
+);
 
 fn main() {
     dioxus::launch(App);
 }
 
-/// Build a demo grid: several strangers in and around one cell.
-///
-/// Every tile here is genuinely signed and genuinely verified by the same
-/// code path the network uses — the only thing faked is delivery.
-fn demo_grid() -> (Vec<Tile>, String) {
-    let me = Session::new(Identity::from_seed([1; 32]), [2; 32], Privacy::Km1);
-    let coverage = me
-        .coverage(37.7749, -122.4194, 1_785_527_000)
-        .expect("valid coordinates");
-    let home = coverage.publish_target();
-    let neighbour_cell = coverage.cells[1].clone();
+/// The signed-in user. A fixed seed for now: onboarding and key storage
+/// land with the Android shell, where the Keystore does the wrapping.
+fn me() -> Session {
+    Session::new(Identity::from_seed([1; 32]), [2; 32], Privacy::Km1)
+}
 
+fn coverage_for(s: &Session) -> Coverage {
+    s.coverage(37.7749, -122.4194, 1_785_527_000)
+        .expect("valid demo coordinates")
+}
+
+fn cbor(v: &impl serde::Serialize) -> Vec<u8> {
+    let mut b = Vec::new();
+    ciborium::ser::into_writer(v, &mut b).expect("cbor");
+    b
+}
+
+/// Demo tiles — real signatures, fake delivery.
+fn demo_tiles(session: &Session, cov: &Coverage) -> Vec<Tile> {
+    let home = cov.publish_target();
+    let neighbour = CellParams {
+        schema_v: SCHEMA_V,
+        cell_id: cov.cells[1].as_str().to_string(),
+        epoch: cov.epochs[0],
+    };
     let people: [(u8, &str, u64, bool); 12] = [
         (10, "new in town, show me somewhere good", 900, true),
         (11, "coffee?", 890, true),
@@ -45,60 +72,117 @@ fn demo_grid() -> (Vec<Tile>, String) {
         (15, "walking the dog", 960, false),
         (21, "cycling home", 950, false),
     ];
-
     let mut grid = Grid::new();
-    for (seed, headline, ts, same_cell) in people {
-        let params = if same_cell {
-            home.clone()
-        } else {
-            lkng_presence::CellParams {
-                schema_v: lkng_app::SCHEMA_V,
-                cell_id: neighbour_cell.as_str().to_string(),
-                epoch: coverage.epochs[0],
-            }
-        };
+    for (seed, headline, ts, same) in people {
+        let params = if same { home.clone() } else { neighbour.clone() };
         let them = Session::new(Identity::from_seed([seed; 32]), [seed; 32], Privacy::Km1);
         let tile = them
             .compose_tile(&params, headline, vec![seed; 48], ts)
             .expect("compose");
         let mut state = CellState::default();
         state.insert(tile);
-        let mut bytes = Vec::new();
-        ciborium::ser::into_writer(&state, &mut bytes).expect("cbor");
-        grid.absorb(&me, &params, &bytes, &coverage.home)
+        grid.absorb(session, &params, &cbor(&state), &cov.home)
             .expect("absorb");
     }
-    let cell = coverage.home.as_str().to_string();
-    (grid.tiles(), cell)
+    grid.tiles()
+}
+
+/// Build the grid from whatever the node has actually delivered.
+fn live_tiles(session: &Session, cov: &Coverage, node: &Node) -> (Vec<Tile>, usize) {
+    let mut grid = Grid::new();
+    for params in cov.watch_set() {
+        let key = Node::key_for(CELL_WASM, &cbor(&params));
+        if let Some(bytes) = node.state_of(key.id()) {
+            // `absorb` re-verifies every record: a peer can serve state
+            // that never passed through a validating node.
+            let _ = grid.absorb(session, &params, &bytes, &cov.home);
+        }
+    }
+    (grid.tiles(), grid.rejected)
 }
 
 #[component]
 fn App() -> Element {
-    let (tiles, cell) = use_hook(demo_grid);
+    let session = use_hook(me);
+    let cov = use_hook(|| coverage_for(&me()));
+    let node = use_hook(Node::connect);
+
+    // Once the socket opens, ask for every cell we watch and subscribe, so
+    // later arrivals are pushed rather than polled.
+    let mut requested = use_signal(|| false);
+    {
+        let node = node.clone();
+        let cov = cov.clone();
+        use_effect(move || {
+            let connected = *node.status.borrow() == Status::Connected;
+            if connected && !requested() {
+                for params in cov.watch_set() {
+                    let key = Node::key_for(CELL_WASM, &cbor(&params));
+                    node.get(key, true);
+                }
+                requested.set(true);
+            }
+        });
+    }
+
+    // Poll the shared inbox generation so the component re-renders when
+    // anything lands. The callback-driven browser API has no stream to
+    // await, so a cheap counter is the honest bridge.
+    let mut generation = use_signal(|| 0u64);
+    {
+        let node = node.clone();
+        use_future(move || {
+            let node = node.clone();
+            async move {
+                loop {
+                    let g = node.generation();
+                    if g != *generation.peek() {
+                        generation.set(g);
+                    }
+                    gloo_timers::future::TimeoutFuture::new(400).await;
+                }
+            }
+        });
+    }
+    let _ = generation();
+
+    let status = node.status.borrow().clone();
+    let (found, rejected) = live_tiles(&session, &cov, &node);
+    let live = !found.is_empty();
+    let tiles = if live { found } else { demo_tiles(&session, &cov) };
+
     let mut blocked = use_signal(Vec::<[u8; 32]>::new);
     let mut selected = use_signal(|| None::<Tile>);
-
     let visible: Vec<Tile> = tiles
-        .iter()
+        .into_iter()
         .filter(|t| !blocked.read().contains(&t.pseudonym))
-        .cloned()
         .collect();
+
+    let note = match (&status, live) {
+        (Status::Connected, true) => {
+            "Live from the network. Everyone nearby, no distances, no company in the middle."
+        }
+        (Status::Connected, false) => {
+            "Connected — nobody in your cells yet. Showing sample tiles."
+        }
+        (Status::Connecting, _) => "Connecting to your node…",
+        (Status::Failed(_), _) => {
+            "No node reachable. Showing sample tiles — each is still really signed and verified."
+        }
+    };
 
     rsx! {
         document::Link { rel: "stylesheet", href: CSS }
         header { class: "bar",
             div { class: "brand", "LKNG" }
             div { class: "cell",
-                span { class: "dot" }
-                "{cell}"
+                span { class: if live { "dot" } else { "dot off" } }
+                "{cov.home.as_str()}"
             }
         }
 
         main {
-            p { class: "note",
-                "Everyone nearby, no distances, no company in the middle. "
-                "Tiles below are cryptographically verified."
-            }
+            p { class: "note", "{note}" }
 
             div { class: "grid",
                 for tile in visible.iter().cloned() {
@@ -113,6 +197,12 @@ fn App() -> Element {
             if visible.is_empty() {
                 div { class: "empty",
                     "Nobody here right now. The grid fills as people arrive in your area."
+                }
+            }
+
+            if rejected > 0 {
+                div { class: "warn",
+                    "{rejected} tile(s) failed verification and were not shown."
                 }
             }
         }
@@ -168,8 +258,8 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
-/// Placeholder tile art derived from the pseudonym, so the grid looks like
-/// a grid before photo support lands. Deterministic per pseudonym, and it
+/// Placeholder tile art derived from the pseudonym, so the grid reads as a
+/// grid before photo support lands. Deterministic per pseudonym, and it
 /// changes when the pseudonym rotates — which is the honest behaviour.
 fn swatch(pseudonym: &[u8; 32]) -> String {
     // u32, not u16: 255 * 360 = 91_800 overflows a u16, which panics in
