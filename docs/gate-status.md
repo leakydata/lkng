@@ -862,3 +862,56 @@ Not adopting Atlas as a dependency: it is an explicit work-in-progress RFC
 whose own proposal says everything in it is subject to change. Shaping our
 moderation actions as signed claims about subjects keeps the door open
 without taking the risk.
+
+## Reference review: Open-Grindr, screen by screen (2026-08-01)
+
+Six screens from a Grindr clone that drives the real Grindr API. Useful
+because it shows what users of this category actually expect, which is a
+different question from what is safe to build.
+
+| Screen | Adopt? |
+| --- | --- |
+| **1 · Browse grid** with filter chips across the top | Yes — 3 columns matches ours; add the chip row |
+| **2 · 1:1 messaging** with expiring images | Mostly — see the honesty note below |
+| **3 · Views / Taps tabs** | **Taps yes, Views no** |
+| **4 · Advanced filters** | Yes — this drove real gaps, below |
+| **5 · Profile page** | Yes, minus the distance readout |
+| **6 · Map location picker** | Yes — the plan already requires manual location |
+
+### Gaps it exposed in our model
+
+- **Gender was simply missing.** Their filter offers Men / Women /
+  Non-binary / Trans Men / Trans Women / Not specified. For this app that
+  is not optional, and it is now `Gender` with named variants plus a
+  `SelfDescribed(String)` escape hatch — a closed list always fails
+  somebody, and failing somebody's gender here is not a cosmetic bug.
+- **"Not specified" is something people search *for*, not only a gap.**
+  Our rule that unstated never matches a criterion is right, but it made
+  anyone who declined to state a position invisible to every filtered
+  search. `include_unspecified_position` makes that an explicit,
+  deliberate choice — the two behaviours are different and both are
+  needed.
+- Their position vocabulary matches ours exactly, with directional arrows
+  (↑ Top, ↗ Vers Top, ↕ Versatile, ↘ Vers Bottom, ↓ Bottom, ⇄ Side) worth
+  adopting in the UI.
+
+### What we deliberately will not copy
+
+**Distance, everywhere.** Every screen shows it — "11 m", "5.6 km", even
+in the chat header. That is exactly the mechanism behind the documented
+trilateration attacks on this category. LKNG shows cell membership and
+nothing finer, and `tiles_carry_no_distance` fails the build if a distance
+field ever appears in the render model. This is our largest UX divergence
+and it is the entire point of the project.
+
+**"Views" — who looked at your profile.** Implementing it requires logging
+every view, which is precisely the surveillance apparatus this project
+exists to refuse. **Taps are fine** and will be built: a tap is an explicit
+act by the person doing it, not a record kept about someone who did
+nothing.
+
+**"Expiring images" need honest wording.** Media in LKNG is replicated
+ciphertext; revocation is prospective only. A timer can hide an image in
+our client and stop distributing it, but cannot reach copies already
+fetched. If this ships, it says "hidden after 10 minutes", never
+"deleted" — anything stronger is a promise the network cannot keep.

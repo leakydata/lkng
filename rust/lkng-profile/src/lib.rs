@@ -100,6 +100,44 @@ pub enum ProfileError {
     Encode(String),
 }
 
+/// Gender identity.
+///
+/// An enum with an explicit `SelfDescribed` escape hatch rather than a
+/// closed list: a fixed set always fails somebody, and in this app failing
+/// somebody's gender is not a cosmetic bug. The named variants exist so
+/// filtering is reliable for the common cases; the free-text variant means
+/// nobody is forced into a box that is wrong.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Gender {
+    Man,
+    Woman,
+    NonBinary,
+    TransMan,
+    TransWoman,
+    /// Anything else, in the person's own words.
+    SelfDescribed(String),
+}
+
+impl Gender {
+    pub fn label(&self) -> String {
+        match self {
+            Gender::Man => "Man".into(),
+            Gender::Woman => "Woman".into(),
+            Gender::NonBinary => "Non-binary".into(),
+            Gender::TransMan => "Trans man".into(),
+            Gender::TransWoman => "Trans woman".into(),
+            Gender::SelfDescribed(s) => s.clone(),
+        }
+    }
+
+    fn valid(&self) -> bool {
+        match self {
+            Gender::SelfDescribed(s) => !s.is_empty() && s.len() <= MAX_DEMOGRAPHIC_BYTES,
+            _ => true,
+        }
+    }
+}
+
 /// Sexual position. Ordinary preference data, not health data, so this is
 /// allowed on a public tile as well as in a profile — it is also the
 /// filter people reach for most.
@@ -218,6 +256,8 @@ pub struct Demographics {
     pub looking_for: Option<String>,
     #[serde(default)]
     pub position: Option<Position>,
+    #[serde(default)]
+    pub gender: Option<Gender>,
     /// See [`HivStatus`]: profile only, never on a tile.
     #[serde(default)]
     pub hiv_status: Option<HivStatus>,
@@ -252,6 +292,11 @@ impl Demographics {
                 return Err(ProfileError::BadDemographic);
             }
         }
+        if let Some(g) = &self.gender {
+            if !g.valid() {
+                return Err(ProfileError::BadDemographic);
+            }
+        }
         if let Some((y, m)) = self.last_tested {
             if !(1980..=2200).contains(&y) || !(1..=12).contains(&m) {
                 return Err(ProfileError::BadDemographic);
@@ -283,11 +328,23 @@ impl Demographics {
                 _ => return false,
             }
         }
+        if !q.genders.is_empty() {
+            match &self.gender {
+                Some(g) if q.genders.contains(g) => {}
+                _ => return false,
+            }
+        }
         if !q.positions.is_empty() {
             match self.position {
                 Some(p) if q.positions.contains(&p) => {}
                 _ => return false,
             }
+        }
+        // "Not specified" is a thing people deliberately search for, not
+        // only a gap. Without this, someone who has not stated a position
+        // is unreachable by any filtered search at all.
+        if q.include_unspecified_position && self.position.is_none() {
+            return true;
         }
         if !q.hiv_statuses.is_empty() {
             match self.hiv_status {
@@ -319,9 +376,14 @@ pub struct Search {
     pub ethnicity: Option<String>,
     pub body_type: Option<String>,
     pub looking_for: Option<String>,
+    /// Empty means "any".
+    pub genders: Vec<Gender>,
     /// Empty means "any". Listed rather than a single value because people
     /// search for several at once.
     pub positions: Vec<Position>,
+    /// Deliberately include people who stated no position — the
+    /// "Not specified" chip, distinct from "any".
+    pub include_unspecified_position: bool,
     /// Empty means "any".
     pub hiv_statuses: Vec<HivStatus>,
     /// Substring match over display name, bio and tags.
@@ -872,6 +934,7 @@ mod search_tests {
             pronouns: Some("he/him".into()),
             looking_for: Some(looking.into()),
             position: None,
+            gender: None,
             hiv_status: None,
             last_tested: None,
         }
@@ -969,6 +1032,7 @@ mod position_health_tests {
         Demographics {
             age: Some(32),
             position: Some(pos),
+            gender: Some(Gender::Man),
             hiv_status: Some(hiv),
             last_tested: Some((2026, 6)),
             ..Default::default()
@@ -1049,6 +1113,78 @@ mod position_health_tests {
             a.signing_payload_current(&p).unwrap(),
             b.signing_payload_current(&p).unwrap(),
             "altering someone's stated status in transit must break verification"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gender_tests {
+    use super::*;
+
+    #[test]
+    fn named_genders_filter() {
+        let nb = Demographics { gender: Some(Gender::NonBinary), ..Default::default() };
+        let tw = Demographics { gender: Some(Gender::TransWoman), ..Default::default() };
+        let q = Search {
+            genders: vec![Gender::NonBinary, Gender::TransMan],
+            ..Default::default()
+        };
+        assert!(nb.matches(&q));
+        assert!(!tw.matches(&q));
+    }
+
+    #[test]
+    fn self_described_gender_is_supported_and_matchable() {
+        // The escape hatch has to actually work, not just exist.
+        let g = Gender::SelfDescribed("genderqueer".into());
+        let d = Demographics { gender: Some(g.clone()), ..Default::default() };
+        assert!(d.validate().is_ok());
+        assert_eq!(d.gender.as_ref().unwrap().label(), "genderqueer");
+        assert!(d.matches(&Search { genders: vec![g], ..Default::default() }));
+    }
+
+    #[test]
+    fn empty_self_description_is_rejected() {
+        let d = Demographics {
+            gender: Some(Gender::SelfDescribed(String::new())),
+            ..Default::default()
+        };
+        assert_eq!(d.validate(), Err(ProfileError::BadDemographic));
+    }
+
+    #[test]
+    fn not_specified_is_searchable_on_purpose() {
+        // Distinct from "any": someone who stated no position must be
+        // reachable by a search that deliberately asks for them, or they
+        // are invisible to every filtered search there is.
+        let quiet = Demographics { age: Some(30), ..Default::default() };
+        let stated = Demographics {
+            age: Some(30),
+            position: Some(Position::Top),
+            ..Default::default()
+        };
+        let q = Search { include_unspecified_position: true, ..Default::default() };
+        assert!(quiet.matches(&q));
+
+        let strict = Search { positions: vec![Position::Bottom], ..Default::default() };
+        assert!(!quiet.matches(&strict), "and still absent from a specific filter");
+        assert!(!stated.matches(&strict));
+    }
+
+    #[test]
+    fn gender_is_covered_by_the_signature() {
+        let p = ProfileParams::new(vec![7u8; ML_DSA_65_VK_BYTES]);
+        let a = ProfileBody {
+            demographics: Demographics { gender: Some(Gender::TransMan), ..Default::default() },
+            sequence: 1,
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.demographics.gender = Some(Gender::Man);
+        assert_ne!(
+            a.signing_payload_current(&p).unwrap(),
+            b.signing_payload_current(&p).unwrap(),
+            "nobody may rewrite someone's stated gender in transit"
         );
     }
 }
