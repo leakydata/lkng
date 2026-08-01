@@ -180,3 +180,11 @@ main {
 }
 
 .warn-inline { color: #d0455a; }
+
+.badge-sample {
+  margin-left: 7px; padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(208, 69, 90, .18);
+  color: #d0455a;
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+}

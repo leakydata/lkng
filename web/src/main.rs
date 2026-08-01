@@ -403,6 +403,9 @@ fn App() -> Element {
             div { class: "cell",
                 span { class: if live { "dot" } else { "dot off" } }
                 "{cov.home.as_str()}"
+                if fix != Fix::Device {
+                    span { class: "badge-sample", "sample" }
+                }
             }
         }
 
