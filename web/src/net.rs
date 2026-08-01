@@ -39,9 +39,10 @@ pub fn node_url() -> String {
         .and_then(|l| l.protocol().ok())
         .unwrap_or_else(|| "http:".into());
     let ws = if proto == "https:" { "wss" } else { "ws" };
-    // Served by the node → same host. Served by dx serve → the dev port
-    // has no node, so fall back to the node's own default.
-    let host = if host.starts_with("127.0.0.1:8080") || host.starts_with("localhost:8080") {
+    // Served by the node → same host, which is the production path and
+    // works inside the node's sandbox iframe. Served by `dx serve` → that
+    // dev port has no node behind it, so fall back to the node's default.
+    let host = if host.contains(":8080") {
         "127.0.0.1:7509".to_string()
     } else {
         host
@@ -54,6 +55,18 @@ pub enum Status {
     Connecting,
     Connected,
     Failed(String),
+}
+
+impl Status {
+    /// Short human explanation, used in the UI. A status line that only
+    /// ever says "connecting" is indistinguishable from a hang.
+    pub fn describe(&self, url: &str) -> String {
+        match self {
+            Status::Connected => "Live from the network.".into(),
+            Status::Connecting => format!("Connecting to your node at {url}…"),
+            Status::Failed(e) => format!("No node at {url}: {e}"),
+        }
+    }
 }
 
 /// What the UI polls.

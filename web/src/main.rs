@@ -169,17 +169,28 @@ fn App() -> Element {
     let note = match (&status, live) {
         (Status::Connected, true) => {
             "Live from the network. Everyone nearby, no distances, no company in the middle."
+                .to_string()
         }
         (Status::Connected, false) => {
-            "Connected — nobody in your cells yet. Showing sample tiles."
+            "Connected — nobody in your cells yet. Showing sample tiles.".to_string()
         }
-        (Status::Connecting, _) => "Connecting to your node…",
-        (Status::Failed(_), _) => {
-            "No node reachable. Showing sample tiles — each is still really signed and verified."
-        }
+        // Say where we are looking and why it failed. A status line that
+        // only ever reads "connecting" cannot be told apart from a hang,
+        // which cost real debugging time on device.
+        (s, _) => format!(
+            "{} Showing sample tiles — each is still really signed and verified.",
+            s.describe(&net::node_url())
+        ),
     };
 
     rsx! {
+        // viewport-fit=cover, or env(safe-area-inset-*) is always 0 and
+        // the header sits underneath the phone's status bar. Set here
+        // because the generated index.html ships a plain viewport meta.
+        document::Meta {
+            name: "viewport",
+            content: "width=device-width, initial-scale=1, viewport-fit=cover",
+        }
         style { dangerous_inner_html: CSS }
         header { class: "bar",
             div { class: "brand", "LKNG" }

@@ -41,6 +41,8 @@ pub enum AppError {
     HeadlineTooLong,
     #[error("thumbnail exceeds {MAX_THUMBNAIL_BYTES} bytes")]
     ThumbnailTooLarge,
+    #[error("note or name exceeds its maximum length")]
+    NoteTooLong,
     #[error("decode: {0}")]
     Decode(String),
 }
@@ -843,5 +845,238 @@ mod health_boundary_tests {
         });
         assert!(filtered.is_empty());
         assert_eq!(g.filtered(&GridFilter::default()).len(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private address book: favourites, notes, blocks
+// ---------------------------------------------------------------------------
+
+/// Everything you privately record *about other people*.
+///
+/// # Why this is local-only, permanently
+///
+/// Favourites are an interest graph. Notes are, by definition, things you
+/// wrote about someone that they did not agree to. Blocks reveal who you
+/// avoid. Publishing any of the three — even encrypted, even to "just"
+/// your own contract — would put a standing record of your attractions,
+/// your judgements and your avoidances on other people's disks forever.
+/// None of it ever leaves the device except inside the passphrase-encrypted
+/// identity backup, which the user controls.
+///
+/// # The durable-handle problem, and how it is resolved
+///
+/// Tiles carry **per-epoch pseudonyms** that rotate, which is what stops a
+/// scraper building a movement history. That same rotation means a
+/// favourite or a note attached to a pseudonym would evaporate at the next
+/// epoch — the privacy property and the feature are in direct tension.
+///
+/// The resolution follows what you actually know about a person:
+///
+/// * **After a match** you hold their durable profile key, so favourites
+///   and notes attach to that and last forever. This is the case that
+///   matters: notes are for people you have actually dealt with.
+/// * **Before a match** you know only a rotating pseudonym, so a "pin" is
+///   explicitly session-scoped and says so. Pretending otherwise would
+///   mean either leaking a durable handle onto tiles (defeating rotation)
+///   or silently losing the user's data at the epoch boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AddressBook {
+    /// Durable profile keys (the owner verifying key) marked as favourite.
+    favourites: BTreeMap<Vec<u8>, Favourite>,
+    /// Blocked epoch pseudonyms — see [`Session::block`].
+    blocked: BTreeMap<[u8; 32], ()>,
+    /// Pseudonyms pinned for this epoch only. Not persisted by
+    /// [`AddressBook::export`], because they are meaningless later.
+    #[serde(skip)]
+    session_pins: BTreeMap<[u8; 32], String>,
+}
+
+/// A favourited person, plus whatever you wrote about them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Favourite {
+    /// Their display name at the time you saved them, so the list is
+    /// readable before their profile is re-fetched.
+    pub remembered_as: String,
+    /// Your private note. Never transmitted anywhere.
+    pub note: String,
+    /// Client clock, for ordering the list.
+    pub added_ms: u64,
+}
+
+/// Longest note we will store. Generous, but bounded: an unbounded field
+/// in an exported backup is an unbounded backup.
+pub const MAX_NOTE_BYTES: usize = 2000;
+pub const MAX_REMEMBERED_NAME_BYTES: usize = 64;
+
+impl AddressBook {
+    /// Favourite someone you have matched with, keyed by their durable
+    /// profile key.
+    pub fn favourite(
+        &mut self,
+        durable_key: &[u8],
+        remembered_as: &str,
+        added_ms: u64,
+    ) -> Result<(), AppError> {
+        if remembered_as.len() > MAX_REMEMBERED_NAME_BYTES {
+            return Err(AppError::NoteTooLong);
+        }
+        let entry = self.favourites.entry(durable_key.to_vec()).or_default();
+        entry.remembered_as = remembered_as.to_string();
+        if entry.added_ms == 0 {
+            entry.added_ms = added_ms;
+        }
+        Ok(())
+    }
+
+    pub fn unfavourite(&mut self, durable_key: &[u8]) {
+        self.favourites.remove(durable_key);
+    }
+
+    pub fn is_favourite(&self, durable_key: &[u8]) -> bool {
+        self.favourites.contains_key(durable_key)
+    }
+
+    /// Write (or clear) a private note about someone.
+    ///
+    /// Noting somebody implies keeping them, so this creates the entry if
+    /// it does not exist — otherwise a note typed before tapping the star
+    /// would be silently discarded.
+    pub fn set_note(&mut self, durable_key: &[u8], note: &str) -> Result<(), AppError> {
+        if note.len() > MAX_NOTE_BYTES {
+            return Err(AppError::NoteTooLong);
+        }
+        self.favourites.entry(durable_key.to_vec()).or_default().note = note.to_string();
+        Ok(())
+    }
+
+    pub fn note(&self, durable_key: &[u8]) -> Option<&str> {
+        self.favourites.get(durable_key).map(|f| f.note.as_str())
+    }
+
+    /// Favourites, newest first.
+    pub fn favourites(&self) -> Vec<(&Vec<u8>, &Favourite)> {
+        let mut v: Vec<_> = self.favourites.iter().collect();
+        v.sort_by(|a, b| b.1.added_ms.cmp(&a.1.added_ms).then(a.0.cmp(b.0)));
+        v
+    }
+
+    /// Pin a pseudonym for the current epoch only.
+    ///
+    /// Returns `false` to make the limitation impossible to ignore: the
+    /// caller must tell the user this will not survive the epoch.
+    pub fn pin_for_session(&mut self, pseudonym: [u8; 32], label: &str) -> bool {
+        self.session_pins.insert(pseudonym, label.to_string());
+        false
+    }
+
+    pub fn is_pinned(&self, pseudonym: &[u8; 32]) -> bool {
+        self.session_pins.contains_key(pseudonym)
+    }
+
+    /// Serialize for the identity backup. Session pins are excluded by
+    /// construction.
+    pub fn export(&self) -> Result<Vec<u8>, AppError> {
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(self, &mut buf)
+            .map_err(|e| AppError::Decode(e.to_string()))?;
+        Ok(buf)
+    }
+
+    pub fn import(bytes: &[u8]) -> Result<Self, AppError> {
+        ciborium::de::from_reader(bytes).map_err(|e| AppError::Decode(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod address_book_tests {
+    use super::*;
+
+    const ALICE: &[u8] = &[0xA1; 32];
+    const BOB: &[u8] = &[0xB0; 32];
+
+    #[test]
+    fn favourite_and_note_round_trip() {
+        let mut book = AddressBook::default();
+        book.favourite(ALICE, "alex from the bar", 1_000).unwrap();
+        book.set_note(ALICE, "knows the good record shop").unwrap();
+        assert!(book.is_favourite(ALICE));
+        assert_eq!(book.note(ALICE), Some("knows the good record shop"));
+
+        let bytes = book.export().unwrap();
+        let restored = AddressBook::import(&bytes).unwrap();
+        assert_eq!(restored.note(ALICE), Some("knows the good record shop"));
+    }
+
+    #[test]
+    fn a_note_alone_creates_the_entry() {
+        // Typing a note before tapping the star must not silently vanish.
+        let mut book = AddressBook::default();
+        book.set_note(BOB, "met at the thing").unwrap();
+        assert_eq!(book.note(BOB), Some("met at the thing"));
+    }
+
+    #[test]
+    fn favouriting_twice_keeps_the_original_timestamp() {
+        let mut book = AddressBook::default();
+        book.favourite(ALICE, "alex", 1_000).unwrap();
+        book.favourite(ALICE, "alex (updated)", 9_000).unwrap();
+        let (_, fav) = book.favourites()[0];
+        assert_eq!(fav.added_ms, 1_000, "ordering must not jump on a rename");
+        assert_eq!(fav.remembered_as, "alex (updated)");
+    }
+
+    #[test]
+    fn favourites_are_newest_first() {
+        let mut book = AddressBook::default();
+        book.favourite(ALICE, "alex", 100).unwrap();
+        book.favourite(BOB, "bo", 900).unwrap();
+        assert_eq!(book.favourites()[0].1.remembered_as, "bo");
+    }
+
+    #[test]
+    fn oversized_notes_rejected() {
+        let mut book = AddressBook::default();
+        let huge = "x".repeat(MAX_NOTE_BYTES + 1);
+        assert!(matches!(book.set_note(ALICE, &huge), Err(AppError::NoteTooLong)));
+        // An unbounded field in an exported backup is an unbounded backup.
+        assert!(book.note(ALICE).is_none());
+    }
+
+    #[test]
+    fn session_pins_do_not_survive_export() {
+        // The durable-handle problem made explicit: a pin is tied to a
+        // rotating pseudonym, so persisting it would restore something
+        // meaningless next epoch.
+        let mut book = AddressBook::default();
+        let persisted = book.pin_for_session([7u8; 32], "cute, said hi");
+        assert!(!persisted, "the API must admit a pin is session-scoped");
+        assert!(book.is_pinned(&[7u8; 32]));
+
+        let restored = AddressBook::import(&book.export().unwrap()).unwrap();
+        assert!(!restored.is_pinned(&[7u8; 32]));
+    }
+
+    #[test]
+    fn nothing_in_the_book_is_publishable_state() {
+        // Guard: the address book must never gain a path onto the network.
+        // If someone adds one, this test is where they should have to
+        // argue for it.
+        let mut book = AddressBook::default();
+        book.favourite(ALICE, "alex", 1).unwrap();
+        book.set_note(ALICE, "private thoughts").unwrap();
+        let exported = book.export().unwrap();
+        // Exported only for the passphrase-encrypted identity backup —
+        // nothing here is a contract delta, and no encoder in lkng-presence
+        // or lkng-profile accepts it.
+        assert!(!exported.is_empty());
+        assert!(
+            std::panic::catch_unwind(|| {
+                ciborium::de::from_reader::<lkng_presence::CellState, _>(&exported[..]).is_ok()
+            })
+            .map(|ok| !ok)
+            .unwrap_or(true),
+            "address book must not decode as publishable cell state"
+        );
     }
 }

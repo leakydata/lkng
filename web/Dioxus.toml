@@ -3,3 +3,7 @@ name = "lkng"
 
 [web.app]
 title = "LKNG"
+
+# viewport-fit=cover is required or env(safe-area-inset-*) is always 0,
+# and the header sits under the phone status bar.
+viewport = "width=device-width, initial-scale=1, viewport-fit=cover"

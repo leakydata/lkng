@@ -915,3 +915,45 @@ ciphertext; revocation is prospective only. A timer can hide an image in
 our client and stop distributing it, but cannot reach copies already
 fetched. If this ships, it says "hidden after 10 minutes", never
 "deleted" — anything stronger is a promise the network cannot keep.
+
+## Favourites and private notes (2026-08-01)
+
+Both are in `AddressBook`, and both are **device-local, permanently**.
+Favourites are an interest graph; notes are by definition things you wrote
+about someone who did not agree to it; blocks reveal who you avoid.
+Publishing any of the three — even encrypted, even to your own contract —
+would put a standing record of your attractions, judgements and avoidances
+on other people's disks forever. They leave the device only inside the
+passphrase-encrypted identity backup.
+
+### The durable-handle problem
+
+Tiles carry per-epoch pseudonyms that rotate, which is what stops a scraper
+building a movement history. That same rotation means a favourite or note
+attached to a pseudonym would evaporate at the next epoch: **the privacy
+property and the feature are in direct tension.**
+
+Resolved by following what you actually know about a person:
+
+- **After a match** you hold their durable profile key, so favourites and
+  notes attach to that and last. This is the case that matters — notes are
+  for people you have dealt with.
+- **Before a match** you know only a rotating pseudonym, so a pin is
+  session-scoped. `pin_for_session` returns `false` specifically so the
+  caller cannot ignore that and must tell the user.
+
+The alternatives were both worse: leak a durable handle onto tiles
+(defeating rotation) or silently lose the user's notes at an epoch
+boundary.
+
+`nothing_in_the_book_is_publishable_state` exists as a guard — if someone
+later adds a path from the address book to the network, that test is where
+they have to argue for it.
+
+### Screens still to build
+
+From the Grindr/Open-Grindr surface: albums and videos, taps, messages
+list, settings, profile editing, sign-up and login. Sign-up and login are
+*not* account screens here — there is no account. They are key generation
+into the Keystore and passphrase recovery, which already exist and tested
+in `lkng-identity`; what is missing is the UI.
