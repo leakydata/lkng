@@ -23,6 +23,18 @@ class MainActivity : AppCompatActivity() {
 
         startForegroundService(Intent(this, NodeService::class.java))
 
+        // Coarse location only, and only in the foreground. Asked for here
+        // rather than at first use so the grid is not empty on first run
+        // while a dialog waits behind it.
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this, arrayOf(android.Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION
+            )
+        }
+
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -46,6 +58,7 @@ class MainActivity : AppCompatActivity() {
             // from our own local content — see shouldOverrideUrlLoading,
             // which pins navigation to the node's loopback origin.
             addJavascriptInterface(KeyVault(this@MainActivity), "LkngVault")
+            addJavascriptInterface(Locator(this@MainActivity), "LkngLocation")
 
             webViewClient = object : WebViewClient() {
 
@@ -169,5 +182,6 @@ class MainActivity : AppCompatActivity() {
 
         /** ~2 minutes of 2s polls. A cold node on a slow phone is slow. */
         const val MAX_STARTUP_ATTEMPTS = 60
+        private const val REQ_LOCATION = 1001
     }
 }

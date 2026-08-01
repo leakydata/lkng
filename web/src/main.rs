@@ -196,9 +196,58 @@ fn me() -> Session {
     )
 }
 
-fn coverage_for(s: &Session) -> Coverage {
-    s.coverage(37.7749, -122.4194, 1_785_527_000)
-        .expect("valid demo coordinates")
+/// Where the app believes the user is, and how sure it is.
+#[derive(Clone, Copy, PartialEq)]
+enum Fix {
+    /// From the device, via the coarse-location bridge.
+    Device,
+    /// Permission granted but no position yet — Android has not returned
+    /// a last-known fix.
+    Waiting,
+    /// No bridge (desktop dev) or permission refused.
+    None,
+}
+
+/// Ask the Android shell for a coarse position.
+fn device_position() -> Option<(f64, f64)> {
+    let win = web_sys::window()?;
+    let loc = js_sys::Reflect::get(&win, &"LkngLocation".into()).ok()?;
+    let loc = loc.dyn_into::<js_sys::Object>().ok()?;
+    let f = js_sys::Reflect::get(&loc, &"lastKnown".into()).ok()?;
+    let f = f.dyn_into::<js_sys::Function>().ok()?;
+    let s = f.call0(&loc).ok()?.as_string()?;
+    let (a, b) = s.split_once(',')?;
+    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+}
+
+fn location_bridge_present() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &"LkngLocation".into()).ok())
+        .map(|v| !v.is_undefined() && !v.is_null())
+        .unwrap_or(false)
+}
+
+/// Seconds since the unix epoch, for choosing the presence epoch.
+fn now_unix() -> u64 {
+    (js_sys::Date::now() / 1000.0) as u64
+}
+
+/// Coverage from the device where possible.
+///
+/// The fallback coordinates are a **placeholder, not a guess**: showing
+/// someone a grid of people 3,000 km away as though they were nearby would
+/// be worse than showing nothing, so the UI says which case it is in
+/// rather than quietly pretending.
+fn coverage_for(s: &Session) -> (Coverage, Fix) {
+    let (pos, fix) = match device_position() {
+        Some(p) => (p, Fix::Device),
+        None if location_bridge_present() => ((37.7749, -122.4194), Fix::Waiting),
+        None => ((37.7749, -122.4194), Fix::None),
+    };
+    let cov = s
+        .coverage(pos.0, pos.1, now_unix())
+        .expect("coordinates from the platform are in range");
+    (cov, fix)
 }
 
 fn cbor(v: &impl serde::Serialize) -> Vec<u8> {
@@ -261,7 +310,7 @@ fn live_tiles(session: &Session, cov: &Coverage, node: &Node) -> (Vec<Tile>, usi
 #[component]
 fn App() -> Element {
     let session = use_hook(me);
-    let cov = use_hook(|| coverage_for(&me()));
+    let (cov, fix) = use_hook(|| coverage_for(&me()));
     let node = use_hook(Node::connect);
 
     // Once the socket opens, ask for every cell we watch and subscribe, so
@@ -320,9 +369,17 @@ fn App() -> Element {
             "Live from the network. Everyone nearby, no distances, no company in the middle."
                 .to_string()
         }
-        (Status::Connected, false) => {
-            "Connected — nobody in your cells yet. Showing sample tiles.".to_string()
-        }
+        (Status::Connected, false) => match fix {
+            Fix::Device => "Connected — nobody in your area yet.".to_string(),
+            Fix::Waiting => {
+                "Connected. Waiting for your location — the grid below is a sample."
+                    .to_string()
+            }
+            Fix::None => {
+                "Connected, but location is unavailable, so this is a sample area."
+                    .to_string()
+            }
+        },
         // Say where we are looking and why it failed. A status line that
         // only ever reads "connecting" cannot be told apart from a hang,
         // which cost real debugging time on device.
