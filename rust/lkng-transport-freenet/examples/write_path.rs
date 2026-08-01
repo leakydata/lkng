@@ -34,5 +34,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => println!("UPDATE FAILED: {e}"),
     }
+    c.close().await;
     Ok(())
 }

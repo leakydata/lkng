@@ -194,5 +194,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n--- two strangers met over Freenet, with no server anywhere ---");
+    demux.close().await;
     Ok(())
 }

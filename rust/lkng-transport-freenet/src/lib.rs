@@ -199,6 +199,19 @@ impl FreenetClient {
         .await
     }
 
+    /// Close the session, returning the node's accept slot.
+    ///
+    /// See [`demux::Demux::close`] for why this is not optional: a node's
+    /// connection backlog is finite, and clients that exit without
+    /// disconnecting exhaust it.
+    pub async fn close(mut self) {
+        let _ = self
+            .api
+            .send(ClientRequest::Disconnect { cause: None })
+            .await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
     /// Subscribe without fetching.
     pub async fn subscribe(&mut self, key: &ContractKey) -> Result<()> {
         self.request(ClientRequest::ContractOp(ContractRequest::Subscribe {

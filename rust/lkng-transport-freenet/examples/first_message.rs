@@ -136,5 +136,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n--- profile → message → read, all over Freenet, no server ---");
+    demux.close().await;
     Ok(())
 }

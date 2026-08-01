@@ -63,5 +63,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("update accepted; waiting for the notification to land...");
 
     watcher.await?;
+    demux.close().await;
     Ok(())
 }

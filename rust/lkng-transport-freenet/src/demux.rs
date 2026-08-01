@@ -70,10 +70,34 @@ struct Routes {
 }
 
 /// Handle to a running session with a demultiplexed reader.
+///
+/// Dropping the last handle closes the session. That matters more than it
+/// looks: a node's accept queue is finite (backlog 128 by default), and a
+/// client that exits without disconnecting leaves its socket pending.
+/// Enough short-lived processes doing that and the node stops accepting
+/// connections entirely — observed here after ~30 hours of example runs,
+/// with `ss` showing 129 queued against a backlog of 128 and every new
+/// connection timing out. The node was healthy; it had simply run out of
+/// slots because *we* never gave any back.
 #[derive(Clone)]
 pub struct Demux {
     tx: mpsc::Sender<ClientRequest<'static>>,
     routes: Arc<Mutex<Routes>>,
+}
+
+impl Demux {
+    /// Close the session politely, returning the node's accept slot.
+    ///
+    /// Call this before a short-lived process exits. It is idempotent and
+    /// safe to call on an already-dead session.
+    pub async fn close(&self) {
+        let _ = self
+            .tx
+            .send(ClientRequest::Disconnect { cause: None })
+            .await;
+        // Give the reader a moment to flush it before the process exits.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
 }
 
 impl Demux {
