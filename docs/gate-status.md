@@ -796,3 +796,30 @@ runs 0.2.117. Fine for now — they interoperate — but the Android build
 needs re-cross-compiling per release, and there is no upstream Android
 release asset to pull, so this is a standing maintenance cost rather than
 a one-off.
+
+## Styles inlined, so the UI survives being served from a contract
+
+The app rendered as unstyled buttons on the phone while looking correct in
+a desktop browser. Cause: Dioxus injects `<link href="/assets/…">` at
+runtime, which is **root-absolute**. Under `dx serve` the app lives at `/`
+so that resolves; on a node it lives at `/v1/contract/web/<id>/`, where a
+root-absolute path points outside the contract and 404s. The WASM loaded
+(so the app ran) but the stylesheet never arrived.
+
+Fixed by compiling the stylesheet into the binary with `include_str!` and
+rendering it as an inline `<style>`. Path resolution leaves the picture
+entirely, and it costs one small file's worth of bytes. Verified by
+grepping the *published* wasm for `grid-template-columns`.
+
+This generalises: **anything the UI loads by absolute path breaks once the
+UI is served from a contract**, and the failure is partial and quiet —
+the app works, it just looks wrong. Prefer embedding over fetching for
+anything small.
+
+### A note on verifying on-device
+
+Screenshotting the phone to check the UI captured the notification shade
+and personal content instead. Deleted from device and disk, and not
+repeated: on-device checks now inspect the DOM or the published artefact
+rather than photographing someone's screen. A debugging convenience is not
+worth reading a person's messages.
