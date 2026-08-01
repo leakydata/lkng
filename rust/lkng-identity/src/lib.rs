@@ -612,7 +612,7 @@ mod tests {
         id.sign_presence(&mut r, &p).unwrap();
         assert_ne!(
             r.verifying_key.unwrap(),
-            id.profile_params().owner_vk,
+            id.verifying_key_bytes(),
             "epoch key must not equal the profile's owner key"
         );
     }
@@ -764,6 +764,10 @@ impl Identity {
     /// genuine "I have read these" from anyone else trying to hide
     /// messages from you.
     pub fn sign_processed(&self, state: &mut InboxState) -> Result<(), IdentityError> {
+        // Claiming the inbox and proving whose it is are the same act, so
+        // stamp the key here rather than making every caller remember. The
+        // address binding in `verify_state` is what makes this safe.
+        state.recipient_vk = self.verifying_key_bytes();
         let params = self.inbox_params();
         let processed = ProcessedSet { ids: state.processed.ids.clone(), sig: None };
         let payload = processed
