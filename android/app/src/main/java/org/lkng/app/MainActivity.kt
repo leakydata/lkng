@@ -59,6 +59,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        // Self-test: seal and unseal a known value from Kotlin, with no
+        // JavaScript involved. This separates "the Keystore code is
+        // broken" from "the JS bridge never ran", which otherwise look
+        // identical from outside (no vault file either way).
+        if (BuildConfig.DEBUG) {
+            val vault = KeyVault(this)
+            val probe = android.util.Base64.encodeToString(ByteArray(32) { 0x5A }, android.util.Base64.NO_WRAP)
+            val stored = vault.put("selftest.probe", probe)
+            val read = vault.get("selftest.probe")
+            android.util.Log.i(
+                "lkng.vault",
+                "selftest stored=$stored roundtrip=${read == probe} sealed=${vault.isSealed()}"
+            )
+        }
+
         web.clearCache(true)
         setContentView(web)
         web.loadUrl("http://127.0.0.1:${NodeService.WS_PORT}/v1/contract/web/$UI_CONTRACT/")
