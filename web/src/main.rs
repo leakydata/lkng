@@ -20,7 +20,15 @@ use lkng_identity::Identity;
 use lkng_presence::{CellParams, CellState};
 use net::{Node, Status};
 
-const CSS: Asset = asset!("/assets/lkng.css");
+/// Styles are **inlined**, not linked.
+///
+/// Dioxus injects a `<link href="/assets/…">` at runtime, which is
+/// root-absolute. That resolves under `dx serve` at `/`, but the app is
+/// really served from `/v1/contract/web/<id>/` on a Freenet node, where a
+/// root-absolute path points outside the contract and 404s — the app
+/// renders as unstyled buttons. Inlining removes path resolution from the
+/// picture entirely, and costs one small file's worth of HTML.
+const CSS: &str = include_str!("../assets/lkng.css");
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -172,7 +180,7 @@ fn App() -> Element {
     };
 
     rsx! {
-        document::Link { rel: "stylesheet", href: CSS }
+        style { dangerous_inner_html: CSS }
         header { class: "bar",
             div { class: "brand", "LKNG" }
             div { class: "cell",
