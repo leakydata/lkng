@@ -1023,3 +1023,36 @@ The honest caveat, already in the code: a weak passphrase is
 brute-forceable offline by anyone who guesses the derivation, which is why
 Argon2id runs at 64 MiB / 3 passes and the UI must enforce a strength
 meter.
+
+## Upgrade discipline, checked against official guidance (2026-08-01)
+
+`upgrade-and-migration.md` opens with a design precondition that decides
+whether upgrades are routine or catastrophic:
+
+> Choose a stable identity anchor that is independent of the WASM; never
+> expose the raw content-addressed contract key as your app's identity.
+
+**We satisfy this**, and only just — because of the address change made
+hours earlier. A contract key is `BLAKE3(BLAKE3(wasm) || params)`, so it
+moves on *any* WASM change: a dependency bump, a compiler change, a
+one-line fix. LKNG's durable identity is
+`address = BLAKE3(signing_key)[..16]`, which involves no WASM at all, so
+clients re-derive the new contract key and every reference still points at
+the right person. River anchors the same way (invites embed the room
+owner's verifying key), and its live 0.6→0.8 stdlib re-key migrated every
+room with no recreation and no broken invites.
+
+Had we kept shipping raw contract keys as identity — or the full key in
+parameters — every profile link, every match, and every inbox reference
+would break on the next `freenet-stdlib` bump. That is not a bug you fix
+after launch.
+
+**The gap we do have:** no carry-forward. When a contract's WASM changes,
+its old state is currently orphaned — we saw this today when adding
+`encryption_key` produced a new contract with none of the old state. The
+anchor is right, so references survive; the *state* does not follow yet.
+Delta's `legacy_contracts.toml` is the mechanism, and it needs adopting
+before anyone but us holds data worth keeping.
+
+Guidance worth repeating verbatim: *"Read it before your second release,
+and design for it before your first."*
