@@ -29,6 +29,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
+    buildFeatures { buildConfig = true }
+
     // The Freenet node ships as a native library so Android extracts it
     // and marks it executable; a plain asset cannot be exec'd on modern
     // Android (W^X on app-private storage).

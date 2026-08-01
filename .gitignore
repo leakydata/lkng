@@ -10,3 +10,8 @@ contracts/*/cell_params.bin
 web/.playwright-mcp/
 web/target/
 .playwright-mcp/
+jniLibs/
+android/app/src/main/jniLibs/
+android/local.properties
+android/.gradle/
+android/app/build/
