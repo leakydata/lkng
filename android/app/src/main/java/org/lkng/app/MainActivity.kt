@@ -48,6 +48,24 @@ class MainActivity : AppCompatActivity() {
             addJavascriptInterface(KeyVault(this@MainActivity), "LkngVault")
 
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (!BuildConfig.DEBUG) return
+                    // Report what the page can actually see. Distinguishes
+                    // "bridge missing in this frame" from "stale UI that
+                    // predates the vault code".
+                    view?.evaluateJavascript(
+                        """(function(){
+                             var f = document.querySelector('iframe');
+                             return JSON.stringify({
+                               url: location.href.slice(0, 70),
+                               vaultInMain: typeof LkngVault,
+                               hasIframe: !!f,
+                               iframeSrc: f ? f.src.slice(0, 70) : null
+                             });
+                           })()"""
+                    ) { r -> android.util.Log.i("lkng.probe", r) }
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?, request: WebResourceRequest?
                 ): Boolean {
