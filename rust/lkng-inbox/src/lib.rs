@@ -468,7 +468,7 @@ mod tests {
         // replayed into another, forging "they messaged you".
         let e = env(1, 100);
         let mut other = params();
-        other.recipient_vk = vec![9u8; ML_DSA_65_VK_BYTES];
+        other.address = address_of(&vec![9u8; ML_DSA_65_VK_BYTES]);
         assert_ne!(
             e.signing_payload(&params()).unwrap(),
             e.signing_payload(&other).unwrap()

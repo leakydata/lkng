@@ -832,6 +832,7 @@ mod tests {
 
     fn state(seq: u64, name: &str) -> ProfileState {
         ProfileState {
+            owner_vk: vec![7u8; ML_DSA_65_VK_BYTES],
             body: Some(body(seq, name)),
             sig: Some(vec![9; 64]),
             deleted: None,
@@ -873,6 +874,7 @@ mod tests {
     fn deletion_suppresses_body_and_is_sticky() {
         let mut a = state(3, "x");
         let tomb = ProfileState {
+            owner_vk: vec![7u8; ML_DSA_65_VK_BYTES],
             body: None,
             sig: None,
             deleted: Some(SignedDeletion { sequence: 5, sig: vec![1; 64] }),
@@ -890,6 +892,7 @@ mod tests {
         // Deleting is not permanent banishment — the owner may re-publish
         // with a higher sequence than the tombstone.
         let mut a = ProfileState {
+            owner_vk: vec![7u8; ML_DSA_65_VK_BYTES],
             body: None,
             sig: None,
             deleted: Some(SignedDeletion { sequence: 5, sig: vec![1; 64] }),
@@ -916,7 +919,12 @@ mod tests {
 
     #[test]
     fn body_without_signature_is_invalid() {
-        let s = ProfileState { body: Some(body(1, "n")), sig: None, deleted: None };
+        let s = ProfileState {
+            owner_vk: vec![7u8; ML_DSA_65_VK_BYTES],
+            body: Some(body(1, "n")),
+            sig: None,
+            deleted: None,
+        };
         assert_eq!(s.validate_shape(), Err(ProfileError::MalformedSignature));
     }
 
@@ -925,7 +933,7 @@ mod tests {
         let b = body(1, "n");
         let p1 = params();
         let mut p2 = params();
-        p2.owner_vk = vec![8u8; ML_DSA_65_VK_BYTES];
+        p2.address = address_of(&vec![8u8; ML_DSA_65_VK_BYTES]);
         assert_ne!(
             b.signing_payload_current(&p1).unwrap(),
             b.signing_payload_current(&p2).unwrap(),

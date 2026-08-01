@@ -44,9 +44,14 @@ const ARGON_MEM_KIB: u32 = 64 * 1024;
 const ARGON_PASSES: u32 = 3;
 const ARGON_LANES: u32 = 1;
 
-/// Bundle wire-format version. Bump on any layout change; old versions
-/// must keep decoding (see `freenet-git`'s pinned wire-format tests).
+/// Bundle wire-format version. Bump on any layout change; **old versions
+/// must keep decoding** — a user restoring a two-year-old backup is
+/// exactly the person who cannot be asked to upgrade first.
 pub const BUNDLE_V1: u8 = 1;
+/// v2 adds an opaque `extra` blob alongside the seed, so callers can carry
+/// app data (favourites, notes, blocks) in the same encrypted file without
+/// this crate having to know what any of it means.
+pub const BUNDLE_V2: u8 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
@@ -190,7 +195,12 @@ impl Identity {
             .expanded_key()
             .sign_deterministic(&payload, SIGN_CONTEXT)
             .map_err(|_| IdentityError::BadKey)?;
-        Ok(ProfileState { body: Some(body), sig: Some(sig.encode().to_vec()), deleted: None })
+        Ok(ProfileState {
+            owner_vk: self.verifying_key_bytes(),
+            body: Some(body),
+            sig: Some(sig.encode().to_vec()),
+            deleted: None,
+        })
     }
 
     /// Sign a profile deletion. `sequence` must exceed the live body's, so
@@ -207,24 +217,49 @@ impl Identity {
             .sign_deterministic(&payload, SIGN_CONTEXT)
             .map_err(|_| IdentityError::BadKey)?;
         tomb.sig = sig.encode().to_vec();
-        Ok(ProfileState { body: None, sig: None, deleted: Some(tomb) })
+        Ok(ProfileState {
+            owner_vk: self.verifying_key_bytes(),
+            body: None,
+            sig: None,
+            deleted: Some(tomb),
+        })
     }
 
     /// Encrypt this identity into a recovery bundle under `passphrase`.
     pub fn to_backup(&self, passphrase: &str, salt: [u8; 16]) -> Result<Vec<u8>, IdentityError> {
+        self.to_backup_with(passphrase, salt, &[])
+    }
+
+    /// As [`Identity::to_backup`], plus an opaque application blob.
+    ///
+    /// Kept opaque on purpose: this crate holds key material and must not
+    /// grow a dependency on application types to move a user's notes. The
+    /// caller decides what goes in and what it means.
+    pub fn to_backup_with(
+        &self,
+        passphrase: &str,
+        salt: [u8; 16],
+        extra: &[u8],
+    ) -> Result<Vec<u8>, IdentityError> {
         let mut key = derive_key(passphrase, &salt);
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
         // Nonce derived from the salt: each bundle has a fresh salt, so the
         // (key, nonce) pair is never reused, and one 16-byte salt beats
         // storing salt + nonce separately.
         let nonce_bytes = derive_nonce(&salt);
+        // seed || extra, sealed together so the app blob gets the same
+        // confidentiality and the same tamper detection as the key.
+        let mut plain = Vec::with_capacity(32 + extra.len());
+        plain.extend_from_slice(&self.seed);
+        plain.extend_from_slice(extra);
         let ciphertext = cipher
-            .encrypt(XNonce::from_slice(&nonce_bytes), self.seed.as_ref())
+            .encrypt(XNonce::from_slice(&nonce_bytes), plain.as_ref())
             .map_err(|_| IdentityError::BadKey)?;
+        plain.zeroize();
         key.zeroize();
 
         let bundle = Bundle {
-            version: BUNDLE_V1,
+            version: if extra.is_empty() { BUNDLE_V1 } else { BUNDLE_V2 },
             salt,
             ciphertext,
             argon: ArgonParams {
@@ -242,9 +277,18 @@ impl Identity {
     /// Recover an identity from a bundle. A wrong passphrase is
     /// indistinguishable from corruption, by design.
     pub fn from_backup(bundle_bytes: &[u8], passphrase: &str) -> Result<Self, IdentityError> {
+        Ok(Self::from_backup_with(bundle_bytes, passphrase)?.0)
+    }
+
+    /// Recover an identity *and* whatever application blob was stored with
+    /// it. A v1 bundle simply yields an empty blob.
+    pub fn from_backup_with(
+        bundle_bytes: &[u8],
+        passphrase: &str,
+    ) -> Result<(Self, Vec<u8>), IdentityError> {
         let bundle: Bundle = ciborium::de::from_reader(bundle_bytes)
             .map_err(|e| IdentityError::Encode(e.to_string()))?;
-        if bundle.version != BUNDLE_V1 {
+        if bundle.version != BUNDLE_V1 && bundle.version != BUNDLE_V2 {
             return Err(IdentityError::UnsupportedVersion(bundle.version));
         }
         let mut key = derive_key_with(passphrase, &bundle.salt, &bundle.argon);
@@ -255,11 +299,12 @@ impl Identity {
             .map_err(|_| IdentityError::Undecryptable)?;
         key.zeroize();
 
-        let seed: [u8; 32] = plain
-            .as_slice()
-            .try_into()
-            .map_err(|_| IdentityError::BadKey)?;
-        Ok(Self::from_seed(seed))
+        if plain.len() < 32 {
+            return Err(IdentityError::BadKey);
+        }
+        let seed: [u8; 32] = plain[..32].try_into().map_err(|_| IdentityError::BadKey)?;
+        let extra = plain[32..].to_vec();
+        Ok((Self::from_seed(seed), extra))
     }
 
     /// Locator for the backup contract: derived from the passphrase alone,
@@ -939,7 +984,7 @@ mod reachability_tests {
 
         let body = bob_profile.body.as_ref().unwrap();
         let enc: [u8; 32] = body.encryption_key.as_ref().unwrap()[..].try_into().unwrap();
-        let recipient_vk = bob.profile_params().owner_vk;
+        let recipient_vk = bob.verifying_key_bytes();
 
         let env = alice
             .seal_message(&enc, &recipient_vk, 20674, b"hi from your profile", 1)

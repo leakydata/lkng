@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let enc: [u8; 32] = body.encryption_key.as_ref().expect("reachable")[..].try_into()?;
     let env = alex.seal_message(
         &enc,
-        &sam_profile_params.owner_vk,
+        &sam.verifying_key_bytes(),
         20674,
         b"the worse the film the better. friday?",
         1_785_531_000_000,
