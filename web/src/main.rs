@@ -15,6 +15,7 @@
 mod net;
 
 use dioxus::prelude::*;
+use wasm_bindgen::JsCast;
 use lkng_app::{Coverage, Grid, Privacy, Session, Tile, SCHEMA_V};
 use lkng_identity::Identity;
 use lkng_presence::{CellParams, CellState};
@@ -49,34 +50,126 @@ const JITTER_KEY: &str = "lkng.jitter.secret.v1";
 
 /// Load this device's identity, generating one on first run.
 ///
-/// # Known gap: this seed is in localStorage, not the Keystore
+/// Prefers the Android **Keystore vault** exposed by the shell as
+/// `LkngVault`; falls back to `localStorage` only where that bridge does
+/// not exist, i.e. a desktop browser during development.
 ///
-/// The seed is generated from the platform CSPRNG and is unique per
-/// install — which is the part that actually matters, because a shared
-/// seed would make every user the same person. But it is persisted in
-/// `localStorage`, and PLAN.md is explicit that private keys belong in the
-/// Android Keystore behind the identity delegate, never in web storage.
+/// The distinction matters: the seed *is* the account — it derives the
+/// signing key, every epoch subkey, the encryption key and the recovery
+/// bundle — and there is no server anywhere that could revoke a stolen
+/// one. On a phone it is sealed by a non-exportable Keystore key, so
+/// copying app storage yields ciphertext that opens nowhere else.
 ///
-/// That work needs a JS bridge to the Kotlin shell and is not done. Until
-/// it is, anything with code execution in this WebView can read the seed.
-/// Recorded here rather than in a tracker because the person who removes
-/// this comment is the person who has to have fixed it.
+/// Remaining gap, stated rather than hidden: script running inside our own
+/// WebView can still ask the vault to unseal, because the seed has to
+/// reach the WASM crypto. Closing that means moving signing behind the
+/// bridge so the seed never crosses it. That is the right end state and a
+/// much larger change.
 fn load_or_create(key: &str) -> [u8; 32] {
-    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
-
-    if let Some(s) = &storage {
-        if let Ok(Some(hex)) = s.get_item(key) {
-            if let Some(bytes) = decode_hex(&hex) {
-                return bytes;
-            }
-        }
+    if let Some(seed) = vault_get(key) {
+        return seed;
     }
     let mut seed = [0u8; 32];
     getrandom_03::fill(&mut seed).expect("platform CSPRNG");
-    if let Some(s) = &storage {
-        let _ = s.set_item(key, &encode_hex(&seed));
-    }
+    vault_put(key, &seed);
     seed
+}
+
+/// The `LkngVault` object injected by the Android shell, if present.
+fn vault() -> Option<js_sys::Object> {
+    let win = web_sys::window()?;
+    let v = js_sys::Reflect::get(&win, &"LkngVault".into()).ok()?;
+    v.dyn_into::<js_sys::Object>().ok()
+}
+
+fn vault_call(name: &str, args: &js_sys::Array) -> Option<wasm_bindgen::JsValue> {
+    let v = vault()?;
+    let f = js_sys::Reflect::get(&v, &name.into()).ok()?;
+    let f = f.dyn_into::<js_sys::Function>().ok()?;
+    f.apply(&v, args).ok()
+}
+
+fn vault_get(key: &str) -> Option<[u8; 32]> {
+    let args = js_sys::Array::of1(&key.into());
+    if let Some(res) = vault_call("get", &args) {
+        if let Some(b64) = res.as_string() {
+            if let Some(bytes) = decode_b64_32(&b64) {
+                return Some(bytes);
+            }
+        }
+    }
+
+    // Nothing in the vault. Look in web storage — either because this is a
+    // desktop dev build with no shell, or because this install predates
+    // the vault.
+    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten())?;
+    let hex = storage.get_item(key).ok().flatten()?;
+    let seed = decode_hex(&hex)?;
+
+    // MIGRATE. Without this an install that already had a seed keeps using
+    // web storage forever: the fallback succeeds, so nothing ever writes to
+    // the vault, and the security fix silently applies only to people who
+    // installed after it. Existing users are exactly the ones whose keys
+    // have been exposed longest.
+    let args = js_sys::Array::of2(&key.into(), &encode_b64(&seed).into());
+    if vault_call("put", &args).and_then(|v| v.as_bool()).unwrap_or(false) {
+        // Only remove the plaintext copy once the sealed one is confirmed
+        // stored — losing the seed is losing the account.
+        let _ = storage.remove_item(key);
+    }
+    Some(seed)
+}
+
+fn vault_put(key: &str, seed: &[u8; 32]) {
+    let args = js_sys::Array::of2(&key.into(), &encode_b64(seed).into());
+    if vault_call("put", &args).and_then(|v| v.as_bool()).unwrap_or(false) {
+        return;
+    }
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(key, &encode_hex(seed));
+    }
+}
+
+/// True when the identity is held by the device keystore rather than web
+/// storage. Surfaced in the UI so the claim is visible, not assumed.
+pub fn identity_is_sealed() -> bool {
+    vault_call("isSealed", &js_sys::Array::new())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+fn encode_b64(b: &[u8; 32]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in b.chunks(3) {
+        let n = ((c[0] as u32) << 16)
+            | ((*c.get(1).unwrap_or(&0) as u32) << 8)
+            | (*c.get(2).unwrap_or(&0) as u32);
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+fn decode_b64_32(s: &str) -> Option<[u8; 32]> {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bits = Vec::new();
+    for ch in s.bytes() {
+        if ch == b'=' { break; }
+        let idx = T.iter().position(|&t| t == ch)? as u32;
+        bits.push(idx);
+    }
+    let mut out = Vec::new();
+    for c in bits.chunks(4) {
+        let mut n = 0u32;
+        for (i, v) in c.iter().enumerate() { n |= v << (18 - 6 * i); }
+        out.push((n >> 16) as u8);
+        if c.len() > 2 { out.push((n >> 8) as u8); }
+        if c.len() > 3 { out.push(n as u8); }
+    }
+    out.try_into().ok()
 }
 
 fn encode_hex(b: &[u8; 32]) -> String {
@@ -311,6 +404,16 @@ fn App() -> Element {
 
         footer { class: "foot",
             "{visible.len()} nearby · location is coarse and jittered on your device"
+            br {}
+            // Say which protection is actually in force. A user cannot
+            // judge the risk of an app that will not tell them.
+            if identity_is_sealed() {
+                "your key is sealed by this device's keystore"
+            } else {
+                span { class: "warn-inline",
+                    "pre-alpha: your key is in browser storage, not the device keystore"
+                }
+            }
         }
     }
 }

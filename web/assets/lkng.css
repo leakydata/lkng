@@ -178,3 +178,5 @@ main {
   border: 1px solid rgba(208, 69, 90, .3);
   color: var(--muted); font-size: 12.5px;
 }
+
+.warn-inline { color: #d0455a; }

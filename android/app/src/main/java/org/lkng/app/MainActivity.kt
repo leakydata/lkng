@@ -31,9 +31,21 @@ class MainActivity : AppCompatActivity() {
             // tricked into loading something hostile.
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+
+            // The UI ships over Freenet at a URL that never changes while
+            // its content does, so HTTP caching pins users to whatever
+            // version they first loaded — including past a security fix.
+            // The content comes from a node on loopback, so there is
+            // nothing to save by caching it.
+            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
             // Never in release. Left explicit rather than defaulted so the
             // decision is visible in review.
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+
+            // Keystore-sealed secret storage for the UI. Only reachable
+            // from our own local content — see shouldOverrideUrlLoading,
+            // which pins navigation to the node's loopback origin.
+            addJavascriptInterface(KeyVault(this@MainActivity), "LkngVault")
 
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
@@ -47,6 +59,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        web.clearCache(true)
         setContentView(web)
         web.loadUrl("http://127.0.0.1:${NodeService.WS_PORT}/v1/contract/web/$UI_CONTRACT/")
     }
