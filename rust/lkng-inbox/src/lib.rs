@@ -41,21 +41,32 @@ pub const MAX_PROCESSED: usize = 1024;
 
 pub type EnvelopeId = [u8; 32];
 
-/// Contract parameters: whose inbox this is.
+/// Address length — see `lkng_profile::ADDRESS_BYTES` for why this is a
+/// security parameter rather than a display choice.
+pub const ADDRESS_BYTES: usize = 16;
+
+/// Address of an identity: truncated BLAKE3 of its long-term signing key.
+pub fn address_of(vk: &[u8]) -> [u8; ADDRESS_BYTES] {
+    blake3::hash(vk).as_bytes()[..ADDRESS_BYTES]
+        .try_into()
+        .expect("slice length matches ADDRESS_BYTES")
+}
+
+/// Contract parameters: *just the address* of whoever owns this inbox.
 ///
-/// The recipient key is their **durable** identity — an inbox is
-/// long-lived by nature, and its address is shared deliberately (in a
-/// profile, or during a match), never scraped from a cell.
+/// The recipient's 1952-byte verifying key lives in state, not here —
+/// parameters are carried by every client on every operation, so key
+/// material does not belong in them. `verify_state` rejects any state
+/// whose key does not hash to this address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxParams {
     pub schema_v: u8,
-    #[serde(with = "serde_bytes")]
-    pub recipient_vk: Vec<u8>,
+    pub address: [u8; ADDRESS_BYTES],
 }
 
 impl InboxParams {
-    pub fn new(recipient_vk: Vec<u8>) -> Self {
-        Self { schema_v: 1, recipient_vk }
+    pub fn new(recipient_vk: impl AsRef<[u8]>) -> Self {
+        Self { schema_v: 1, address: address_of(recipient_vk.as_ref()) }
     }
 }
 
@@ -121,7 +132,7 @@ impl Envelope {
         struct Scoped<'a> {
             domain: &'a str,
             schema_v: u8,
-            recipient_vk: &'a [u8],
+            address: &'a [u8],
             sender_epoch_vk: &'a [u8],
             epoch: u64,
             ciphertext: &'a [u8],
@@ -132,7 +143,7 @@ impl Envelope {
             &Scoped {
                 domain: SIG_DOMAIN,
                 schema_v: params.schema_v,
-                recipient_vk: &params.recipient_vk,
+                address: &params.address,
                 sender_epoch_vk: &self.sender_epoch_vk,
                 epoch: self.epoch,
                 ciphertext: &self.ciphertext,
@@ -169,14 +180,14 @@ impl ProcessedSet {
         #[derive(Serialize)]
         struct Scoped<'a> {
             domain: &'a str,
-            recipient_vk: &'a [u8],
+            address: &'a [u8],
             ids: &'a BTreeSet<EnvelopeId>,
         }
         let mut buf = Vec::new();
         ciborium::ser::into_writer(
             &Scoped {
                 domain: "lkng/inbox-processed/v1",
-                recipient_vk: &params.recipient_vk,
+                address: &params.address,
                 ids: &self.ids,
             },
             &mut buf,
@@ -189,6 +200,10 @@ impl ProcessedSet {
 /// Inbox contract state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxState {
+    /// The recipient's long-term signing key, which the address commits
+    /// to. In state, never in parameters.
+    #[serde(default, with = "serde_bytes")]
+    pub recipient_vk: Vec<u8>,
     pub envelopes: BTreeMap<EnvelopeId, Envelope>,
     pub processed: ProcessedSet,
 }
@@ -219,6 +234,11 @@ impl InboxState {
     /// processed is monotonic, so two devices that read different messages
     /// converge to "both read" rather than one erasing the other.
     pub fn merge(&mut self, other: &InboxState) {
+        // Adopt the owner key if we do not have it yet. It is bound to the
+        // address by `verify_state`, so this cannot import a stranger's.
+        if self.recipient_vk.is_empty() && !other.recipient_vk.is_empty() {
+            self.recipient_vk = other.recipient_vk.clone();
+        }
         for e in other.envelopes.values() {
             self.insert(e.clone());
         }
@@ -306,6 +326,7 @@ impl InboxState {
             None
         } else {
             Some(InboxState {
+                recipient_vk: self.recipient_vk.clone(),
                 envelopes: missing,
                 processed: ProcessedSet {
                     ids: if new_processed.is_empty() {
@@ -359,6 +380,11 @@ pub mod verify {
     /// Verify a whole state: every envelope, plus the recipient's
     /// signature over the processed-set if one is present.
     pub fn verify_state(state: &InboxState, params: &InboxParams) -> Result<(), InboxError> {
+        // An inbox with a processed-set must prove whose it is; an empty
+        // one need not have been claimed yet.
+        if !state.recipient_vk.is_empty() && address_of(&state.recipient_vk) != params.address {
+            return Err(InboxError::BadProcessedProof);
+        }
         for env in state.envelopes.values() {
             verify_envelope(env, params)?;
         }
@@ -369,7 +395,7 @@ pub mod verify {
                 .as_deref()
                 .ok_or(InboxError::BadProcessedProof)?;
             let payload = state.processed.signing_payload(params)?;
-            if !check(&params.recipient_vk, &payload, sig)? {
+            if !check(&state.recipient_vk, &payload, sig)? {
                 return Err(InboxError::BadProcessedProof);
             }
         }

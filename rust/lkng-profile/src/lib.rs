@@ -46,25 +46,54 @@ pub const MAX_SIG_BYTES: usize = 4096;
 pub const ML_DSA_65_VK_BYTES: usize = 1952;
 pub const X25519_KEY_BYTES: usize = 32;
 
-/// Contract parameters: who owns this profile. Part of `hash(code, params)`,
-/// so the address IS the identity — nobody else can occupy it.
+/// Truncation length of an address, in bytes.
+///
+/// **A security parameter, not a UX one.** The property that matters is
+/// second-preimage resistance: if an attacker can grind a *different*
+/// keypair whose hash truncates to your address, they can stand up state
+/// at your address carrying their key, and the binding check passes for
+/// both. No contract-side tie-break rescues this — "first writer wins" is
+/// unenforceable in a permissionless eventually-consistent store, and any
+/// deterministic ordering on key bytes is itself grindable. 16 bytes gives
+/// 128-bit resistance; length is the only real defence.
+pub const ADDRESS_BYTES: usize = 16;
+
+/// Address of an identity: truncated BLAKE3 of its **long-term signing
+/// key only**.
+///
+/// Deliberately not derived from the encryption key as well: keeping the
+/// encryption key out of the address is what lets a user rotate it without
+/// their address — and every link anyone has to them — changing.
+pub fn address_of(owner_vk: &[u8]) -> [u8; ADDRESS_BYTES] {
+    blake3::hash(owner_vk).as_bytes()[..ADDRESS_BYTES]
+        .try_into()
+        .expect("slice length matches ADDRESS_BYTES")
+}
+
+/// Contract parameters: *just the address*.
+///
+/// The full ML-DSA-65 verifying key is 1952 bytes, and parameters are
+/// carried by every client on every GET, PUT and subscribe — so key
+/// material does not belong here. The key lives in state, and
+/// `verify_state` rejects any state whose key does not hash to this
+/// address, which keeps the identifier self-certifying: given an address
+/// you can fetch the contract, read the key, and check it yourself with no
+/// directory and no trusted lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileParams {
     pub schema_v: u8,
-    /// Owner's durable ML-DSA-65 verifying key (1952 B).
-    #[serde(with = "serde_bytes")]
-    pub owner_vk: Vec<u8>,
+    pub address: [u8; ADDRESS_BYTES],
 }
 
 impl ProfileParams {
-    pub fn new(owner_vk: Vec<u8>) -> Self {
-        Self { schema_v: 1, owner_vk }
+    pub fn new(owner_vk: impl AsRef<[u8]>) -> Self {
+        Self { schema_v: 1, address: address_of(owner_vk.as_ref()) }
     }
 
-    /// Short shareable handle, same construction as identity fingerprints.
+    /// The shareable handle: base58 of the address. base58 is the *display*
+    /// form only — parameters carry the raw bytes.
     pub fn handle(&self) -> String {
-        let h = blake3::hash(&self.owner_vk);
-        bs58_encode(&h.as_bytes()[..8])
+        bs58_encode(&self.address)
     }
 }
 
@@ -460,7 +489,7 @@ impl ProfileBody {
         struct Scoped<'a> {
             domain: &'a str,
             schema_v: u8,
-            owner_vk: &'a [u8],
+            address: &'a [u8],
             display_name: &'a str,
             bio: &'a str,
             tags: &'a [String],
@@ -473,7 +502,7 @@ impl ProfileBody {
         let scoped = Scoped {
             domain,
             schema_v: params.schema_v,
-            owner_vk: &params.owner_vk,
+            address: &params.address,
             display_name: &self.display_name,
             bio: &self.bio,
             tags: &self.tags,
@@ -546,14 +575,14 @@ impl SignedDeletion {
         #[derive(Serialize)]
         struct Scoped<'a> {
             domain: &'a str,
-            owner_vk: &'a [u8],
+            address: &'a [u8],
             sequence: u64,
         }
         let mut buf = Vec::new();
         ciborium::ser::into_writer(
             &Scoped {
                 domain: "lkng/profile-deletion/v1",
-                owner_vk: &params.owner_vk,
+                address: &params.address,
                 sequence: self.sequence,
             },
             &mut buf,
@@ -566,6 +595,10 @@ impl SignedDeletion {
 /// Full profile contract state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileState {
+    /// The long-term signing key this address commits to. Lives in state,
+    /// never in parameters — see [`ProfileParams`].
+    #[serde(default, with = "serde_bytes")]
+    pub owner_vk: Vec<u8>,
     pub body: Option<ProfileBody>,
     /// Owner signature over `body`'s payload.
     #[serde(default, with = "serde_bytes")]
@@ -700,8 +733,13 @@ pub mod verify {
     /// profile signed before a field was added keeps verifying instead of
     /// silently vanishing from the network (Delta lesson 3).
     pub fn verify_state(state: &ProfileState, params: &ProfileParams) -> Result<(), ProfileError> {
-        if params.owner_vk.len() != ML_DSA_65_VK_BYTES {
+        if state.owner_vk.len() != ML_DSA_65_VK_BYTES {
             return Err(ProfileError::BadOwnerKey);
+        }
+        // Bind state to the address. Without this an untrusted peer could
+        // serve a contract at this address carrying somebody else's key.
+        if address_of(&state.owner_vk) != params.address {
+            return Err(ProfileError::WrongOwner);
         }
         state.validate_shape()?;
 
@@ -709,7 +747,7 @@ pub mod verify {
             let mut ok = false;
             for domain in [SIG_DOMAIN_V2, SIG_DOMAIN_V1] {
                 let payload = body.signing_payload(params, domain)?;
-                if check(&params.owner_vk, &payload, sig)? {
+                if check(&state.owner_vk, &payload, sig)? {
                     ok = true;
                     break;
                 }
@@ -721,7 +759,7 @@ pub mod verify {
 
         if let Some(d) = &state.deleted {
             let payload = d.signing_payload(params)?;
-            if !check(&params.owner_vk, &payload, &d.sig)? {
+            if !check(&state.owner_vk, &payload, &d.sig)? {
                 return Err(ProfileError::VerificationFailed);
             }
         }
