@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use lkng_identity::Identity;
-use lkng_location::{publishable_cell, Cell, JitterRadius, LocationError};
+use lkng_location::{publishable_cell, Cell, LocationError};
 use lkng_presence::{
     epoch_for_unix_time, verify::verify_self_contained, CellParams, CellState, PresenceRecord,
     MAX_HEADLINE_BYTES, MAX_THUMBNAIL_BYTES,
