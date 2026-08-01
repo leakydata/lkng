@@ -754,3 +754,45 @@ object key**, forcing a `Vec` instead of a `HashMap`. LKNG keys maps by
 `[u8; 32]` and serializes with CBOR, which permits non-string keys — so
 this works today. It would break the moment anything is serialized to
 JSON. Recorded so it is a known constraint rather than a future surprise.
+
+## The app loads its UI from Freenet (2026-08-01)
+
+`fdev website publish` put the compiled Dioxus bundle (551 KB compressed,
+4 files) on the network as
+**`H477C5kQMNhXDS3H7rfDujjf3fVUghTNm7VHiyFh5ewn`**, and the Android app now
+points its WebView at that contract on its own node. From the phone's node
+log: `cached contract state`, `subscribed: true`, `failed: 0`.
+
+So the interface is delivered by Freenet rather than baked into the APK.
+UI changes ship by publishing a new version — no store review — and the
+interface itself has no host to take down.
+
+### Three operational failures, all mine, all worth recording
+
+**1. The node's accept queue was saturated.** `ss` showed `LISTEN 129 128`
+— 129 connections queued against a backlog of 128 — so every new client
+timed out. The node was healthy; it had simply run out of accept slots
+because **every example opened a WebSocket and exited without
+disconnecting**. Dozens of runs over 30 hours exhausted it. Fixed at the
+source: `Demux::close()` / `FreenetClient::close()` send a `Disconnect`
+and every example now calls one. A client that does not hand its slot back
+is a slow denial-of-service against its own node, and on a phone that is a
+user-visible failure rather than a lab curiosity.
+
+**2. The node was self-updating out from under us.** It exited with code
+42 — *"Update 0.2.117 detected, exiting for a service supervisor to apply
+it"* — which reads as a crash if you are not looking for it. Updated
+`freenet` and `fdev` to 0.2.117.
+
+**3. The placeholder was doing exactly what a placeholder should.** The
+phone showed *"provided string contained invalid character '_' at byte
+7"*: byte 7 of `REPLACE_WITH_PUBLISHED_UI_CONTRACT_ID` is `_`, which is
+not valid base58. A loud rejection beats a silent blank screen.
+
+### Version skew to watch
+
+The APK still bundles a cross-compiled **0.2.116** node while the desktop
+runs 0.2.117. Fine for now — they interoperate — but the Android build
+needs re-cross-compiling per release, and there is no upstream Android
+release asset to pull, so this is a standing maintenance cost rather than
+a one-off.

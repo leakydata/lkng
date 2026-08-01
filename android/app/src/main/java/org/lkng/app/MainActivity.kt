@@ -65,6 +65,6 @@ class MainActivity : AppCompatActivity() {
          * un-takedownable, which for this audience is a safety property
          * rather than a convenience.
          */
-        const val UI_CONTRACT = "REPLACE_WITH_PUBLISHED_UI_CONTRACT_ID"
+        const val UI_CONTRACT = "H477C5kQMNhXDS3H7rfDujjf3fVUghTNm7VHiyFh5ewn"
     }
 }
