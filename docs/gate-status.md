@@ -823,3 +823,42 @@ and personal content instead. Deleted from device and disk, and not
 repeated: on-device checks now inspect the DOM or the published artefact
 rather than photographing someone's screen. A debugging convenience is not
 worth reading a person's messages.
+
+## Atlas, reviewed against our search (2026-08-01)
+
+Atlas's index contract states its division of labour in the first
+paragraph: *"Ranking, search, and display are client-side; this contract
+enforces only signatures, authorization, structure, bounds, and the
+versioned merge."*
+
+That is exactly the split LKNG arrived at — our filtering runs entirely
+client-side over already-public data and sends nothing, while the contract
+verifies and bounds. Independent agreement from the ecosystem's dedicated
+discovery project is about as good a signal as this design gets.
+
+Three things worth taking:
+
+- **Subject ids are random, not derived.** Atlas uses ~72 bits of
+  randomness *"deliberately not derived from any attribute, so it survives
+  WASM upgrades, URL changes, and owner re-keying."* LKNG derives profile
+  addresses from the owner key, which is what makes address-squatting
+  impossible — a deliberate opposite trade. But it means **an LKNG user
+  cannot rotate their durable key without losing their profile address**.
+  That is a real limitation, and if key rotation is ever wanted, an
+  Atlas-style random id with a signed pointer is the shape to adopt.
+- **Path-traversal checking is done properly and is worth copying
+  verbatim** if LKNG ever renders a user-supplied locator. Atlas's comment
+  is blunt about why: a hand-rolled check against `..` and `%2e%2e` *"is
+  worse than nothing, because it reads as complete coverage while `..%2f`,
+  `%2e%2e%2f`, `%252e%252e`, `.%2e` and `..\` all walk straight
+  through it"*, and it validates the **whole suffix** — path, query and
+  fragment — because browsers normalise dot segments across the entire URL.
+- **Printable-ASCII, length-bounded text for anything reaching both a DOM
+  text node and a JSON string.** LKNG's headline is user-supplied and
+  lands in the DOM; the same discipline should apply before any of it is
+  rendered.
+
+Not adopting Atlas as a dependency: it is an explicit work-in-progress RFC
+whose own proposal says everything in it is subject to change. Shaping our
+moderation actions as signed claims about subjects keeps the door open
+without taking the risk.
