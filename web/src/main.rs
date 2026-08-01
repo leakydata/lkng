@@ -41,10 +41,66 @@ fn main() {
     dioxus::launch(App);
 }
 
-/// The signed-in user. A fixed seed for now: onboarding and key storage
-/// land with the Android shell, where the Keystore does the wrapping.
+/// Storage key for this device's identity seed.
+const SEED_KEY: &str = "lkng.identity.seed.v1";
+/// Storage key for the jitter secret. Separate from the identity so that
+/// losing one does not imply losing the other.
+const JITTER_KEY: &str = "lkng.jitter.secret.v1";
+
+/// Load this device's identity, generating one on first run.
+///
+/// # Known gap: this seed is in localStorage, not the Keystore
+///
+/// The seed is generated from the platform CSPRNG and is unique per
+/// install — which is the part that actually matters, because a shared
+/// seed would make every user the same person. But it is persisted in
+/// `localStorage`, and PLAN.md is explicit that private keys belong in the
+/// Android Keystore behind the identity delegate, never in web storage.
+///
+/// That work needs a JS bridge to the Kotlin shell and is not done. Until
+/// it is, anything with code execution in this WebView can read the seed.
+/// Recorded here rather than in a tracker because the person who removes
+/// this comment is the person who has to have fixed it.
+fn load_or_create(key: &str) -> [u8; 32] {
+    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+
+    if let Some(s) = &storage {
+        if let Ok(Some(hex)) = s.get_item(key) {
+            if let Some(bytes) = decode_hex(&hex) {
+                return bytes;
+            }
+        }
+    }
+    let mut seed = [0u8; 32];
+    getrandom_03::fill(&mut seed).expect("platform CSPRNG");
+    if let Some(s) = &storage {
+        let _ = s.set_item(key, &encode_hex(&seed));
+    }
+    seed
+}
+
+fn encode_hex(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn decode_hex(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// The signed-in user — a real, per-install identity.
 fn me() -> Session {
-    Session::new(Identity::from_seed([1; 32]), [2; 32], Privacy::Km1)
+    Session::new(
+        Identity::from_seed(load_or_create(SEED_KEY)),
+        load_or_create(JITTER_KEY),
+        Privacy::Km1,
+    )
 }
 
 fn coverage_for(s: &Session) -> Coverage {

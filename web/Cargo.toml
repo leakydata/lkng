@@ -14,7 +14,7 @@ ciborium = "0.2"
 serde = { version = "1", features = ["derive"] }
 dioxus = { version = "0.7", features = ["web"] }
 lkng-location = { path = "../rust/lkng-location" }
-web-sys = { version = "0.3", features = ["Window", "Location", "WebSocket", "BinaryType"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "WebSocket", "BinaryType", "Storage"] }
 wasm-bindgen-futures = "0.4"
 gloo-timers = { version = "0.3", features = ["futures"] }
 freenet-stdlib = { version = "0.8.5", features = ["net"] }
