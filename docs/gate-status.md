@@ -692,3 +692,65 @@ are among the most sensitive things a person types.
 
 Demographics are covered by the profile signature, so editing someone's
 stated age in transit breaks verification.
+
+## River, fully reviewed — bans and DMs (2026-08-01)
+
+Earlier passes covered River's room state, synchronizer (where the seed-PUT
+discovery came from), secrets and membership. This pass read `ban.rs`,
+`direct_messages.rs` and `dm_body.rs`, which turn out to answer an
+architecture question LKNG had already bet on.
+
+### River tried LKNG's inbox architecture and reverted it — for reasons that don't apply to us
+
+PR #234 built a per-(recipient, room) inbox contract for private DMs; PR
+#238 reverted it. The stated reason: it was *"redundant with
+freenet/mail"*, and River's own need is better served by **in-room DMs**,
+with **freenet/mail for cross-context DMs** — "when users want to message
+each other without an existing shared-room context".
+
+**LKNG is exactly that cross-context case.** Two strangers in a geohash
+cell share no room, so River's in-room approach has nothing to carry the
+message. And River explicitly accepts a tradeoff we cannot: in-room DMs
+make *"sender/recipient metadata visible to co-members"*, which is fine
+among people who already share a room and catastrophic among strangers in
+a neighbourhood, where it would publish who is contacting whom.
+
+So LKNG keeps its Mail-shaped inbox contract — which is precisely the tool
+River points at for this case.
+
+**Honest residual, now written down:** anyone subscribing to an LKNG inbox
+contract can see envelope count and each sender's *epoch* key. That is a
+bounded social-graph signal — bounded because the key rotates per epoch and
+is not the durable identity — but it is not zero, and
+`docs/anonymity-limitations.md` should say so.
+
+### Confirmations of choices already made
+
+- **Recipient-signed, monotonically-versioned purge tombstones**, with the
+  recipient as sole signer — the same shape as LKNG's owner-signed
+  `ProcessedSet`. Independent arrival at the same design.
+- DM signatures bind sender, recipient, room owner, timestamp and
+  ciphertext under a domain tag — the same anti-replay discipline LKNG
+  applies to presence records, profiles and envelopes.
+
+### Two techniques worth stealing
+
+- **The `0x80` magic byte.** River prefixes structured DM bodies with
+  `0x80`, a UTF-8 *continuation* byte that cannot begin a valid UTF-8
+  string — so legacy plaintext bodies and new CBOR bodies are
+  unambiguously distinguishable with no version field and no migration.
+  Worth adopting when LKNG's message body gains structure.
+- **Ban validity is conditional on the banner.** A ban is honored only
+  while its banner is the owner or a current, signature-validated member,
+  and inert bans are swept. That prevents an un-ban DoS, and a single
+  delta is bounded so a forged flood cannot make signature verification
+  unbounded. LKNG's moderation feeds should adopt the same rule:
+  *a moderation action is only as alive as the authority behind it.*
+
+### A trap LKNG is currently safe from, by luck
+
+River notes (#3987) that `MemberId` is a struct and is **rejected as a JSON
+object key**, forcing a `Vec` instead of a `HashMap`. LKNG keys maps by
+`[u8; 32]` and serializes with CBOR, which permits non-string keys — so
+this works today. It would break the moment anything is serialized to
+JSON. Recorded so it is a known constraint rather than a future surprise.
