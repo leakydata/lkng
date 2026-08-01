@@ -36,6 +36,7 @@ fn tile(id: &Identity, params: &CellParams, headline: &str, ts: u64) -> Presence
         headline: headline.into(),
         thumbnail: vec![0u8; 48],
         timestamp_ms: ts,
+        position: 0,
         age_band: 0,
         verifying_key: None,
         writer_cert: None,

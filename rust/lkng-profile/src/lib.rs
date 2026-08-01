@@ -100,6 +100,93 @@ pub enum ProfileError {
     Encode(String),
 }
 
+/// Sexual position. Ordinary preference data, not health data, so this is
+/// allowed on a public tile as well as in a profile — it is also the
+/// filter people reach for most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Position {
+    Top,
+    VerseTop,
+    Versatile,
+    VerseBottom,
+    Bottom,
+    Side,
+}
+
+impl Position {
+    /// Compact wire/tile representation. 0 is reserved for "unstated", so
+    /// an absent value is never confused with `Top`.
+    pub fn code(self) -> u8 {
+        match self {
+            Position::Top => 1,
+            Position::VerseTop => 2,
+            Position::Versatile => 3,
+            Position::VerseBottom => 4,
+            Position::Bottom => 5,
+            Position::Side => 6,
+        }
+    }
+
+    pub fn from_code(c: u8) -> Option<Self> {
+        Some(match c {
+            1 => Position::Top,
+            2 => Position::VerseTop,
+            3 => Position::Versatile,
+            4 => Position::VerseBottom,
+            5 => Position::Bottom,
+            6 => Position::Side,
+            _ => return None,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Position::Top => "Top",
+            Position::VerseTop => "Verse-Top",
+            Position::Versatile => "Versatile",
+            Position::VerseBottom => "Verse-Bottom",
+            Position::Bottom => "Bottom",
+            Position::Side => "Side",
+        }
+    }
+}
+
+/// HIV status, using current clinical vocabulary.
+///
+/// # This never goes on a tile
+///
+/// Health data on a presence tile would be public to anyone subscribing to
+/// a cell and permanently harvestable — a standing list of who in a
+/// neighbourhood is positive. HIV status is criminalised or grounds for
+/// discrimination in many jurisdictions, and this exact data has been
+/// mishandled by a major app in this category before. It lives **only** in
+/// a profile, which its owner reveals to someone specific.
+/// `hiv_status_never_reaches_a_tile` enforces this rather than trusting a
+/// convention.
+///
+/// `NegativeOnPrep` and `PositiveUndetectable` exist because they are how
+/// people actually describe themselves, and because "undetectable = 
+/// untransmittable" is settled science that a Negative/Positive binary
+/// erases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HivStatus {
+    Negative,
+    NegativeOnPrep,
+    Positive,
+    PositiveUndetectable,
+}
+
+impl HivStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            HivStatus::Negative => "Negative",
+            HivStatus::NegativeOnPrep => "Negative, on PrEP",
+            HivStatus::Positive => "Positive",
+            HivStatus::PositiveUndetectable => "Positive, undetectable",
+        }
+    }
+}
+
 /// Structured demographics, for search and filtering.
 ///
 /// These live in the **profile**, not the tile. A tile is public to anyone
@@ -129,6 +216,16 @@ pub struct Demographics {
     pub pronouns: Option<String>,
     #[serde(default)]
     pub looking_for: Option<String>,
+    #[serde(default)]
+    pub position: Option<Position>,
+    /// See [`HivStatus`]: profile only, never on a tile.
+    #[serde(default)]
+    pub hiv_status: Option<HivStatus>,
+    /// Coarse "last tested" as `(year, month)`. Deliberately not a day:
+    /// an exact date is one more correlator and adds nothing a filter
+    /// needs.
+    #[serde(default)]
+    pub last_tested: Option<(u16, u8)>,
 }
 
 /// Longest any single demographic free-text field may be.
@@ -152,6 +249,11 @@ impl Demographics {
         }
         if let Some(w) = self.weight_kg {
             if !(20..=400).contains(&w) {
+                return Err(ProfileError::BadDemographic);
+            }
+        }
+        if let Some((y, m)) = self.last_tested {
+            if !(1980..=2200).contains(&y) || !(1..=12).contains(&m) {
                 return Err(ProfileError::BadDemographic);
             }
         }
@@ -181,6 +283,18 @@ impl Demographics {
                 _ => return false,
             }
         }
+        if !q.positions.is_empty() {
+            match self.position {
+                Some(p) if q.positions.contains(&p) => {}
+                _ => return false,
+            }
+        }
+        if !q.hiv_statuses.is_empty() {
+            match self.hiv_status {
+                Some(h) if q.hiv_statuses.contains(&h) => {}
+                _ => return false,
+            }
+        }
         for (needle, field) in [
             (&q.ethnicity, &self.ethnicity),
             (&q.body_type, &self.body_type),
@@ -205,6 +319,11 @@ pub struct Search {
     pub ethnicity: Option<String>,
     pub body_type: Option<String>,
     pub looking_for: Option<String>,
+    /// Empty means "any". Listed rather than a single value because people
+    /// search for several at once.
+    pub positions: Vec<Position>,
+    /// Empty means "any".
+    pub hiv_statuses: Vec<HivStatus>,
     /// Substring match over display name, bio and tags.
     pub text: Option<String>,
 }
@@ -752,6 +871,9 @@ mod search_tests {
             body_type: Some("average".into()),
             pronouns: Some("he/him".into()),
             looking_for: Some(looking.into()),
+            position: None,
+            hiv_status: None,
+            last_tested: None,
         }
     }
 
@@ -835,6 +957,98 @@ mod search_tests {
         assert_ne!(
             a.signing_payload_current(&p).unwrap(),
             b.signing_payload_current(&p).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod position_health_tests {
+    use super::*;
+
+    fn d(pos: Position, hiv: HivStatus) -> Demographics {
+        Demographics {
+            age: Some(32),
+            position: Some(pos),
+            hiv_status: Some(hiv),
+            last_tested: Some((2026, 6)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn position_codes_roundtrip_and_reserve_zero() {
+        for p in [
+            Position::Top, Position::VerseTop, Position::Versatile,
+            Position::VerseBottom, Position::Bottom, Position::Side,
+        ] {
+            assert_ne!(p.code(), 0, "0 is reserved for unstated");
+            assert_eq!(Position::from_code(p.code()), Some(p));
+        }
+        assert_eq!(Position::from_code(0), None);
+        assert_eq!(Position::Versatile.label(), "Versatile");
+        assert_eq!(Position::VerseBottom.label(), "Verse-Bottom");
+    }
+
+    #[test]
+    fn position_filter_accepts_several_at_once() {
+        let versatile = d(Position::Versatile, HivStatus::Negative);
+        let top = d(Position::Top, HivStatus::Negative);
+        let q = Search {
+            positions: vec![Position::Versatile, Position::VerseBottom],
+            ..Default::default()
+        };
+        assert!(versatile.matches(&q));
+        assert!(!top.matches(&q));
+    }
+
+    #[test]
+    fn hiv_filter_matches_listed_statuses() {
+        let undetectable = d(Position::Top, HivStatus::PositiveUndetectable);
+        let on_prep = d(Position::Top, HivStatus::NegativeOnPrep);
+        let q = Search {
+            hiv_statuses: vec![HivStatus::PositiveUndetectable],
+            ..Default::default()
+        };
+        assert!(undetectable.matches(&q));
+        assert!(!on_prep.matches(&q));
+    }
+
+    #[test]
+    fn unstated_position_or_status_never_matches_a_filter() {
+        // Same rule as age: a filter must never silently include people
+        // who declined to answer. It matters most here.
+        let quiet = Demographics { age: Some(30), ..Default::default() };
+        assert!(!quiet.matches(&Search { positions: vec![Position::Top], ..Default::default() }));
+        assert!(!quiet.matches(&Search {
+            hiv_statuses: vec![HivStatus::Negative],
+            ..Default::default()
+        }));
+        assert!(quiet.matches(&Search::default()), "still visible unfiltered");
+    }
+
+    #[test]
+    fn implausible_test_dates_rejected() {
+        let mut x = d(Position::Top, HivStatus::Negative);
+        x.last_tested = Some((2026, 13));
+        assert_eq!(x.validate(), Err(ProfileError::BadDemographic));
+        x.last_tested = Some((1900, 6));
+        assert_eq!(x.validate(), Err(ProfileError::BadDemographic));
+    }
+
+    #[test]
+    fn position_and_status_are_covered_by_the_signature() {
+        let p = ProfileParams::new(vec![7u8; ML_DSA_65_VK_BYTES]);
+        let a = ProfileBody {
+            demographics: d(Position::Top, HivStatus::Negative),
+            sequence: 1,
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.demographics.hiv_status = Some(HivStatus::Positive);
+        assert_ne!(
+            a.signing_payload_current(&p).unwrap(),
+            b.signing_payload_current(&p).unwrap(),
+            "altering someone's stated status in transit must break verification"
         );
     }
 }

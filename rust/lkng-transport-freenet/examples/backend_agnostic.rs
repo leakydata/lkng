@@ -24,6 +24,7 @@ async fn publish_tile<T: Transport>(
         headline: headline.into(),
         thumbnail: vec![5u8; 64],
         timestamp_ms: 1_785_526_000_000,
+        position: 0,
         age_band: 0,
         verifying_key: None,
         writer_cert: None,

@@ -145,6 +145,7 @@ mod tests {
             headline: format!("t{seed}"),
             thumbnail: vec![seed; 32],
             timestamp_ms: ts,
+            position: 0,
             age_band: 0,
             verifying_key: None,
             writer_cert: None,

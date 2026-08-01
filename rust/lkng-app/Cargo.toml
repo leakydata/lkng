@@ -17,5 +17,6 @@ serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+ciborium = "0.2"
 lkng-transport-mock = { path = "../lkng-transport-mock" }
 tokio = { version = "1", features = ["full"] }

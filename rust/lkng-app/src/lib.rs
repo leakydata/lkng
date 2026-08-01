@@ -59,6 +59,8 @@ pub struct Tile {
     pub same_cell: bool,
     /// Coarse age band for filtering; 0 means unstated.
     pub age_band: u8,
+    /// Position code for filtering; 0 means unstated.
+    pub position: u8,
 }
 
 /// Where the user is, expressed only as coarse cells.
@@ -108,11 +110,27 @@ impl Coverage {
 pub struct TileFilters {
     /// 0 = unstated, else the decade band: 2 = 20s, 3 = 30s, …
     pub age_band: u8,
+    /// `lkng_profile::Position::code()`, or 0 for unstated.
+    ///
+    /// Position is here and HIV status deliberately is not: one is
+    /// preference, the other is health data that would be permanently
+    /// harvestable from a public cell.
+    pub position: u8,
 }
 
 impl TileFilters {
     pub fn from_age(age: Option<u8>) -> Self {
-        Self { age_band: age.map(|a| a / 10).unwrap_or(0) }
+        Self { age_band: age.map(|a| a / 10).unwrap_or(0), position: 0 }
+    }
+
+    /// Build tile filters from a profile, taking only what is safe to
+    /// publish: a coarse age band and position. Health fields are dropped
+    /// here by construction, not by the caller remembering to.
+    pub fn from_profile(d: &lkng_profile::Demographics) -> Self {
+        Self {
+            age_band: d.age.map(|a| a / 10).unwrap_or(0),
+            position: d.position.map(|p| p.code()).unwrap_or(0),
+        }
     }
 }
 
@@ -130,11 +148,16 @@ pub struct GridFilter {
     pub headline: Option<String>,
     /// Hide tiles from neighbouring cells.
     pub same_cell_only: bool,
+    /// Position codes to include; empty means any.
+    pub positions: Vec<u8>,
 }
 
 impl GridFilter {
     pub fn is_empty(&self) -> bool {
-        self.age_bands.is_none() && self.headline.is_none() && !self.same_cell_only
+        self.age_bands.is_none()
+            && self.headline.is_none()
+            && !self.same_cell_only
+            && self.positions.is_empty()
     }
 
     fn matches(&self, t: &Tile) -> bool {
@@ -145,6 +168,12 @@ impl GridFilter {
             // Unstated (0) never matches a band filter: a filter that
             // silently includes people who said nothing is a lie.
             if t.age_band == 0 || t.age_band < lo || t.age_band > hi {
+                return false;
+            }
+        }
+        if !self.positions.is_empty() {
+            // Unstated (0) never matches, same rule as age.
+            if t.position == 0 || !self.positions.contains(&t.position) {
                 return false;
             }
         }
@@ -274,6 +303,7 @@ impl Session {
             thumbnail,
             timestamp_ms: now_ms,
             age_band: filters.age_band,
+            position: filters.position,
             verifying_key: None,
             writer_cert: None,
             sig: Vec::new(),
@@ -354,6 +384,7 @@ impl Grid {
                 timestamp_ms: rec.timestamp_ms,
                 same_cell: params.cell_id == home.as_str(),
                 age_band: rec.age_band,
+                position: rec.position,
             };
             // Keep the newest tile per person; ties break on pseudonym so
             // two clients rendering the same bytes agree.
@@ -602,7 +633,7 @@ mod filter_tests {
             let rec = them
                 .compose_tile_with(
                     &params, headline, vec![*seed; 8], 100,
-                    TileFilters { age_band: *band },
+                    TileFilters { age_band: *band, position: 0 },
                 )
                 .unwrap();
             let mut st = CellState::default();
@@ -668,6 +699,7 @@ mod filter_tests {
             age_bands: Some((2, 2)),
             headline: Some("horror".into()),
             same_cell_only: true,
+            positions: Vec::new(),
         };
         assert_eq!(g.filtered(&q).len(), 1, "every criterion must hold");
     }
@@ -709,5 +741,107 @@ mod filter_tests {
         let (g2, _) = grid_with(&me, &[(10, "rude person", 3, true)]);
         assert!(g2.filtered(&GridFilter::default()).is_empty());
         assert!(g2.filtered(&GridFilter { headline: Some("rude".into()), ..Default::default() }).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod health_boundary_tests {
+    use super::*;
+    use lkng_profile::{Demographics, HivStatus, Position};
+
+    /// The rule this whole split exists for.
+    ///
+    /// A tile is public to anyone subscribing to a cell. If HIV status
+    /// could reach one, the network would carry a standing, permanently
+    /// harvestable list of who in a neighbourhood is positive — in a world
+    /// where that status is criminalised or grounds for discrimination in
+    /// many places, and where a major app in this category has already
+    /// mishandled exactly this data.
+    #[test]
+    fn hiv_status_never_reaches_a_tile() {
+        let demographics = Demographics {
+            age: Some(34),
+            position: Some(Position::Versatile),
+            hiv_status: Some(HivStatus::PositiveUndetectable),
+            last_tested: Some((2026, 6)),
+            ..Default::default()
+        };
+
+        // The only supported path from a profile to a tile drops it.
+        let filters = TileFilters::from_profile(&demographics);
+        assert_eq!(filters.age_band, 3);
+        assert_eq!(filters.position, Position::Versatile.code());
+
+        let me = Session::new(Identity::from_seed([1; 32]), [2; 32], Privacy::Km1);
+        let cov = me.coverage(37.7749, -122.4194, 1_785_527_000).unwrap();
+        let params = cov.publish_target();
+        let rec = me
+            .compose_tile_with(&params, "hello", vec![1; 16], 100, filters)
+            .unwrap();
+
+        // Nothing clinical in the published bytes, by construction.
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&rec, &mut bytes).unwrap();
+        let hay = String::from_utf8_lossy(&bytes).to_lowercase();
+        for banned in ["hiv", "undetectable", "prep", "positive", "negative", "tested"] {
+            assert!(!hay.contains(banned), "tile leaked `{banned}`");
+        }
+        // And the struct has no field that could carry it.
+        assert_eq!(rec.age_band, 3);
+        assert_eq!(rec.position, Position::Versatile.code());
+    }
+
+    #[test]
+    fn position_filters_the_grid() {
+        let me = Session::new(Identity::from_seed([4; 32]), [5; 32], Privacy::Km1);
+        let cov = me.coverage(37.7749, -122.4194, 1_785_527_000).unwrap();
+        let params = cov.publish_target();
+
+        let mut g = Grid::new();
+        for (seed, pos) in [(20u8, Position::Top), (21, Position::Bottom)] {
+            let them = Session::new(Identity::from_seed([seed; 32]), [seed; 32], Privacy::Km1);
+            let rec = them
+                .compose_tile_with(
+                    &params, pos.label(), vec![seed; 8], 100,
+                    TileFilters { age_band: 3, position: pos.code() },
+                )
+                .unwrap();
+            let mut st = CellState::default();
+            st.insert(rec);
+            let mut buf = Vec::new();
+            ciborium::ser::into_writer(&st, &mut buf).unwrap();
+            g.absorb(&me, &params, &buf, &cov.home).unwrap();
+        }
+
+        let tops = g.filtered(&GridFilter {
+            positions: vec![Position::Top.code()],
+            ..Default::default()
+        });
+        assert_eq!(tops.len(), 1);
+        assert_eq!(tops[0].headline, "Top");
+    }
+
+    #[test]
+    fn unstated_position_never_matches_a_grid_filter() {
+        let me = Session::new(Identity::from_seed([6; 32]), [7; 32], Privacy::Km1);
+        let cov = me.coverage(37.7749, -122.4194, 1_785_527_000).unwrap();
+        let params = cov.publish_target();
+        let them = Session::new(Identity::from_seed([22; 32]), [22; 32], Privacy::Km1);
+        let rec = them
+            .compose_tile_with(&params, "quiet", vec![1; 8], 100, TileFilters::default())
+            .unwrap();
+        let mut st = CellState::default();
+        st.insert(rec);
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&st, &mut buf).unwrap();
+        let mut g = Grid::new();
+        g.absorb(&me, &params, &buf, &cov.home).unwrap();
+
+        let filtered = g.filtered(&GridFilter {
+            positions: vec![Position::Top.code(), Position::Bottom.code()],
+            ..Default::default()
+        });
+        assert!(filtered.is_empty());
+        assert_eq!(g.filtered(&GridFilter::default()).len(), 1);
     }
 }

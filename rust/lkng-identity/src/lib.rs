@@ -358,6 +358,7 @@ mod tests {
             headline: "looking".into(),
             thumbnail: vec![9; 128],
             timestamp_ms: 1_785_523_000_000,
+            position: 0,
             age_band: 0,
             verifying_key: None,
             writer_cert: None,

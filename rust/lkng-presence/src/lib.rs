@@ -117,6 +117,13 @@ pub struct PresenceRecord {
     /// for why this is a band and not a number.
     #[serde(default)]
     pub age_band: u8,
+    /// Sexual position code (0 = unstated); see `lkng_profile::Position`.
+    ///
+    /// Allowed here because it is preference data, not health data, and it
+    /// is the filter people use most. **Nothing clinical belongs on a
+    /// tile** — a tile is public to anyone subscribing to a cell.
+    #[serde(default)]
+    pub position: u8,
     /// Client-claimed capture time, ms since epoch. Untrusted (any client
     /// can lie); used ONLY as the retention ordering key, where lying
     /// forward merely evicts you sooner from someone else's cap.
@@ -197,6 +204,7 @@ impl PresenceRecord {
             thumbnail: &'a [u8],
             timestamp_ms: u64,
             age_band: u8,
+            position: u8,
             writer_cert: Option<&'a [u8]>,
             verifying_key: Option<&'a [u8]>,
         }
@@ -210,6 +218,7 @@ impl PresenceRecord {
             thumbnail: &self.thumbnail,
             timestamp_ms: self.timestamp_ms,
             age_band: self.age_band,
+            position: self.position,
             writer_cert: self.writer_cert.as_deref(),
             verifying_key: self.verifying_key.as_deref(),
         };
@@ -446,6 +455,7 @@ mod tests {
             thumbnail: vec![seed; 64],
             timestamp_ms: ts,
             age_band: 3,
+            position: 0,
             verifying_key: None,
             writer_cert: None,
             sig: vec![seed; 64],
