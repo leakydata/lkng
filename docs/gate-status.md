@@ -604,3 +604,45 @@ The lesson generalises: **a signed-payload change is a contract
 migration**, not a client change. Delta's `legacy_contracts.toml`
 discipline is not optional once real users hold state, because they cannot
 be asked to re-sign in lockstep with a deploy.
+
+## THE ANDROID APP RUNS ITS OWN NODE (2026-08-01)
+
+`android/` builds a 36 MB debug APK that installs and runs on a Samsung
+Galaxy Z Flip 4 (Android 16). From the app's own log:
+
+```
+lkng.node: node started, contributing=true
+```
+
+and from inside the app sandbox: **16 distinct peer addresses**, `joined
+peer` / `connected peers`, ~140 KB of node log in the first minute, node
+RSS **31 MB**. The phone is a Freenet peer, run by the app, with no
+desktop involved.
+
+`contributing=true` is the duty-cycle logic working: the phone was
+charging on un-metered Wi-Fi, so it took the contributing role. On
+battery or on mobile data it runs minimal instead. Both conditions are
+required — charging alone on a metered hotspot would spend the user's data
+allowance carrying other people's traffic, which is not what "pay with
+resources" means to anyone who has ever had a data cap.
+
+### Android specifics that took real work
+
+- **The node ships as `libfreenet.so` under `jniLibs/`, not as an asset.**
+  Modern Android will not execute a file from writable app storage (W^X);
+  `nativeLibraryDir` is one of the few read-only, executable locations, and
+  the packaging only extracts files matching `lib*.so`. Verified directly:
+  running the extracted binary prints `Freenet version: 0.2.116`.
+- **`Process.descendants()` is a Java 9 API Android does not have**, so the
+  Gate-2 finding (the node runs as more than one process, and killing the
+  parent leaves a child networking) is handled by sweeping on the
+  data-dir path, which is unique to this app and cannot touch anything
+  else.
+- **`allowBackup="false"`** — identity keys must never ride out in a cloud
+  backup the user never thought about.
+- **Coarse location only.** Fine location is never requested: position
+  becomes a ~5 km cell on device, and there is no reason to hold precision
+  we would then have to be trusted to discard.
+- **The notification carries a one-tap Stop.** A background networking
+  process a user cannot switch off would not be acceptable in an app whose
+  whole pitch is not taking things from you quietly.
