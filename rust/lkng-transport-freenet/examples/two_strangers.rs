@@ -36,6 +36,7 @@ fn tile(id: &Identity, params: &CellParams, headline: &str, ts: u64) -> Presence
         headline: headline.into(),
         thumbnail: vec![0u8; 48],
         timestamp_ms: ts,
+        age_band: 0,
         verifying_key: None,
         writer_cert: None,
         sig: vec![],
@@ -149,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["p2p".into()],
         photos: vec![],
         thumbnail: vec![2u8; 64],
+        demographics: Default::default(),
         encryption_key: None,
         sequence: 1,
     })?;

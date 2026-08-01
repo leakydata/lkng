@@ -12,6 +12,7 @@ fn main() {
         headline: "first signed tile in the grid".into(),
         thumbnail: vec![0u8; 64],
         timestamp_ms: 1_785_524_000_000,
+        age_band: 0,
         verifying_key: None,
         writer_cert: None,
         sig: vec![],

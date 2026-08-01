@@ -646,3 +646,49 @@ resources" means to anyone who has ever had a data cap.
 - **The notification carries a one-tap Stop.** A background networking
   process a user cannot switch off would not be acceptable in an app whose
   whole pitch is not taking things from you quietly.
+
+## Blocking and search (2026-08-01)
+
+### Blocking
+
+`Session::block` / `unblock` / `export_blocks` / `import_blocks`, tested to
+hold under every filter (`blocked_tiles_stay_hidden_under_every_filter`).
+
+**Blocks are device-local and never published.** A block list on the
+network would tell the blocked person they were blocked, and hand everyone
+else a social graph of who avoids whom — which for this user base is
+genuinely dangerous. The cost is that blocks don't follow you to a new
+device unless the exported blob does; the identity backup is the right
+carrier for that, not a contract.
+
+### Search, and where each field is allowed to live
+
+Two tiers, split on how public the data is:
+
+**Profile — exact values, shared by choice.** `Demographics` carries
+optional age, height, weight, ethnicity, body type, pronouns and
+looking-for, plus free-text search over name, bio and tags. Every field is
+optional: nobody should have to state their weight to use a dating app,
+and a required field is a field people lie in. Ethnicity is free text
+rather than an enum, because a fixed list is a political statement that
+always excludes someone and serves mixed-heritage people badly.
+
+**Tile — coarse bands only.** A tile is public to anyone subscribing to a
+cell, so exact age/height/weight there would hand a scraper a dossier on
+everyone in a neighbourhood. Tiles carry a **decade band** (0 = unstated),
+which is enough to filter a grid and far less useful to harvest.
+
+Two rules both tiers share:
+
+- **Unstated never matches a criterion.** Someone who declined to give
+  their age is not swept into an age-filtered result — a filter that
+  silently includes people who said nothing is a lie.
+- **All criteria must hold.** No fuzzy "best match" that quietly widens
+  what the user asked for.
+
+Filtering runs **client-side over already-public data and sends nothing**,
+so nobody learns what you are looking for. In this category, search terms
+are among the most sensitive things a person types.
+
+Demographics are covered by the profile signature, so editing someone's
+stated age in transit breaks verification.

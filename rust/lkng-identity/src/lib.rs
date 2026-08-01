@@ -358,6 +358,7 @@ mod tests {
             headline: "looking".into(),
             thumbnail: vec![9; 128],
             timestamp_ms: 1_785_523_000_000,
+            age_band: 0,
             verifying_key: None,
             writer_cert: None,
             sig: vec![],
@@ -512,6 +513,7 @@ mod tests {
             tags: vec!["music".into()],
             photos: vec![],
             thumbnail: vec![1; 64],
+            demographics: Default::default(),
             encryption_key: None,
             sequence: 1,
         };
@@ -906,6 +908,7 @@ mod reachability_tests {
         // Caller neglects the field entirely.
         let state = id.sign_profile(ProfileBody {
             display_name: "sam".into(),
+            demographics: Default::default(),
             encryption_key: None,
             sequence: 1,
             ..Default::default()
@@ -927,6 +930,7 @@ mod reachability_tests {
         let alice = Identity::from_seed([0xA1; 32]);
         let bob_profile = bob.sign_profile(ProfileBody {
             display_name: "bob".into(),
+            demographics: Default::default(),
             encryption_key: None,
             sequence: 1,
             ..Default::default()
@@ -950,6 +954,7 @@ mod reachability_tests {
         let mallory = Identity::from_seed([0x77; 32]);
         let mut state = bob.sign_profile(ProfileBody {
             display_name: "bob".into(),
+            demographics: Default::default(),
             encryption_key: None,
             sequence: 1,
             ..Default::default()

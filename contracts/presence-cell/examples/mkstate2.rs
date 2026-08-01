@@ -9,6 +9,7 @@ fn main() {
         headline: "second tile — merged over the network".into(),
         thumbnail: vec![7u8; 64],
         timestamp_ms: 1_785_523_000_000,
+        age_band: 0,
         verifying_key: None,
         writer_cert: None,
         sig: vec![2u8; 64],

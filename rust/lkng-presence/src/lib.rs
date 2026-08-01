@@ -112,6 +112,11 @@ pub struct PresenceRecord {
     /// enforced at the delegate before signing, re-checked here by size).
     #[serde(with = "serde_bytes")]
     pub thumbnail: Vec<u8>,
+    /// Coarse age band (decade; 0 = unstated) so the grid can filter
+    /// without anyone publishing an exact age. See `lkng_app::TileFilters`
+    /// for why this is a band and not a number.
+    #[serde(default)]
+    pub age_band: u8,
     /// Client-claimed capture time, ms since epoch. Untrusted (any client
     /// can lie); used ONLY as the retention ordering key, where lying
     /// forward merely evicts you sooner from someone else's cap.
@@ -191,6 +196,7 @@ impl PresenceRecord {
             headline: &'a str,
             thumbnail: &'a [u8],
             timestamp_ms: u64,
+            age_band: u8,
             writer_cert: Option<&'a [u8]>,
             verifying_key: Option<&'a [u8]>,
         }
@@ -203,6 +209,7 @@ impl PresenceRecord {
             headline: &self.headline,
             thumbnail: &self.thumbnail,
             timestamp_ms: self.timestamp_ms,
+            age_band: self.age_band,
             writer_cert: self.writer_cert.as_deref(),
             verifying_key: self.verifying_key.as_deref(),
         };
@@ -438,6 +445,7 @@ mod tests {
             headline: format!("hi from {seed}"),
             thumbnail: vec![seed; 64],
             timestamp_ms: ts,
+            age_band: 3,
             verifying_key: None,
             writer_cert: None,
             sig: vec![seed; 64],

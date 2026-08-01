@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tags: vec!["films".into()],
         photos: vec![],
         thumbnail: vec![3u8; 64],
+        demographics: Default::default(),
         encryption_key: None, // filled in by sign_profile — see its doc
         sequence: 1,
     })?;

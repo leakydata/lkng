@@ -86,6 +86,10 @@ pub enum ProfileError {
     BadOwnerKey,
     #[error("encryption key must be 32 bytes (X25519)")]
     BadEncryptionKey,
+    #[error("age must be between {MIN_AGE} and {MAX_AGE}")]
+    BadAge,
+    #[error("a demographic field is out of range or too long")]
+    BadDemographic,
     #[error("signature verification failed")]
     VerificationFailed,
     #[error("state does not belong to the owner in the parameters")]
@@ -94,6 +98,115 @@ pub enum ProfileError {
     TombstoneKeyMismatch,
     #[error("encode: {0}")]
     Encode(String),
+}
+
+/// Structured demographics, for search and filtering.
+///
+/// These live in the **profile**, not the tile. A tile is public to anyone
+/// scraping a cell; exact age, height, weight and ethnicity on a tile would
+/// hand a scraper a rich dossier on everyone in a neighbourhood. The grid
+/// filters on coarse bands instead (see `lkng_presence::TileFilters`), and
+/// the precise values appear only in a profile its owner chose to share.
+///
+/// Every field is optional. Nobody should be forced to state their weight
+/// to use a dating app, and a required field is a field people lie in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Demographics {
+    #[serde(default)]
+    pub age: Option<u8>,
+    #[serde(default)]
+    pub height_cm: Option<u16>,
+    #[serde(default)]
+    pub weight_kg: Option<u16>,
+    /// Free text rather than an enum: a fixed list of ethnicities is a
+    /// political statement that always excludes someone, and mixed-heritage
+    /// people are ill-served by radio buttons.
+    #[serde(default)]
+    pub ethnicity: Option<String>,
+    #[serde(default)]
+    pub body_type: Option<String>,
+    #[serde(default)]
+    pub pronouns: Option<String>,
+    #[serde(default)]
+    pub looking_for: Option<String>,
+}
+
+/// Longest any single demographic free-text field may be.
+pub const MAX_DEMOGRAPHIC_BYTES: usize = 40;
+/// Ages outside this are rejected outright: below is a child-safety matter,
+/// above is certainly a typo or a joke, and both make filters meaningless.
+pub const MIN_AGE: u8 = 18;
+pub const MAX_AGE: u8 = 120;
+
+impl Demographics {
+    pub fn validate(&self) -> Result<(), ProfileError> {
+        if let Some(a) = self.age {
+            if !(MIN_AGE..=MAX_AGE).contains(&a) {
+                return Err(ProfileError::BadAge);
+            }
+        }
+        if let Some(h) = self.height_cm {
+            if !(50..=280).contains(&h) {
+                return Err(ProfileError::BadDemographic);
+            }
+        }
+        if let Some(w) = self.weight_kg {
+            if !(20..=400).contains(&w) {
+                return Err(ProfileError::BadDemographic);
+            }
+        }
+        for f in [&self.ethnicity, &self.body_type, &self.pronouns, &self.looking_for] {
+            if let Some(v) = f {
+                if v.len() > MAX_DEMOGRAPHIC_BYTES {
+                    return Err(ProfileError::BadDemographic);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Does this profile match a search? All supplied criteria must hold;
+    /// an absent value never matches a criterion that requires it, so
+    /// filtering never silently includes people who said nothing.
+    pub fn matches(&self, q: &Search) -> bool {
+        if let Some((lo, hi)) = q.age_range {
+            match self.age {
+                Some(a) if a >= lo && a <= hi => {}
+                _ => return false,
+            }
+        }
+        if let Some((lo, hi)) = q.height_cm_range {
+            match self.height_cm {
+                Some(h) if h >= lo && h <= hi => {}
+                _ => return false,
+            }
+        }
+        for (needle, field) in [
+            (&q.ethnicity, &self.ethnicity),
+            (&q.body_type, &self.body_type),
+            (&q.looking_for, &self.looking_for),
+        ] {
+            if let Some(n) = needle {
+                match field {
+                    Some(v) if v.to_lowercase().contains(&n.to_lowercase()) => {}
+                    _ => return false,
+                }
+            }
+        }
+        true
+    }
+}
+
+/// A profile search. Every field is optional; an empty search matches all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Search {
+    pub age_range: Option<(u8, u8)>,
+    pub height_cm_range: Option<(u16, u16)>,
+    pub ethnicity: Option<String>,
+    pub body_type: Option<String>,
+    pub looking_for: Option<String>,
+    /// Substring match over display name, bio and tags.
+    pub text: Option<String>,
 }
 
 /// A content-addressed photo reference. Bytes live elsewhere.
@@ -115,6 +228,9 @@ pub struct ProfileBody {
     /// a second fetch that might hit an evicted contract.
     #[serde(with = "serde_bytes")]
     pub thumbnail: Vec<u8>,
+    /// Structured, searchable demographics.
+    #[serde(default)]
+    pub demographics: Demographics,
     /// X25519 public key others use to seal messages to this identity.
     ///
     /// Published here rather than in a presence tile on purpose: a tile is
@@ -149,6 +265,7 @@ impl ProfileBody {
                 return Err(ProfileError::BadEncryptionKey);
             }
         }
+        self.demographics.validate()?;
         Ok(())
     }
 
@@ -169,6 +286,7 @@ impl ProfileBody {
             photos: &'a [PhotoRef],
             thumbnail: &'a [u8],
             encryption_key: Option<&'a [u8]>,
+            demographics: &'a Demographics,
             sequence: u64,
         }
         let scoped = Scoped {
@@ -181,6 +299,7 @@ impl ProfileBody {
             photos: &self.photos,
             thumbnail: &self.thumbnail,
             encryption_key: self.encryption_key.as_deref(),
+            demographics: &self.demographics,
             sequence: self.sequence,
         };
         let mut buf = Vec::new();
@@ -203,6 +322,29 @@ impl ProfileBody {
         ciborium::ser::into_writer(self, &mut buf)
             .map_err(|e| ProfileError::Encode(e.to_string()))?;
         Ok(*blake3::hash(&buf).as_bytes())
+    }
+}
+
+impl ProfileBody {
+    /// Does this profile match a search, including free-text over name,
+    /// bio and tags?
+    pub fn matches(&self, q: &Search) -> bool {
+        if !self.demographics.matches(q) {
+            return false;
+        }
+        if let Some(t) = &q.text {
+            let t = t.to_lowercase();
+            let hay = format!(
+                "{} {} {}",
+                self.display_name.to_lowercase(),
+                self.bio.to_lowercase(),
+                self.tags.join(" ").to_lowercase()
+            );
+            if !hay.contains(&t) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -463,6 +605,7 @@ mod tests {
             tags: vec!["a".into()],
             photos: vec![],
             thumbnail: vec![1, 2, 3],
+            demographics: Default::default(),
             encryption_key: None,
             sequence: seq,
         }
@@ -592,6 +735,106 @@ mod tests {
         assert!(
             s.delta(&parent, &p, &summary).is_none(),
             "identical peers -> None -> zero bytes on the wire"
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn demo(age: u8, h: u16, eth: &str, looking: &str) -> Demographics {
+        Demographics {
+            age: Some(age),
+            height_cm: Some(h),
+            weight_kg: Some(75),
+            ethnicity: Some(eth.into()),
+            body_type: Some("average".into()),
+            pronouns: Some("he/him".into()),
+            looking_for: Some(looking.into()),
+        }
+    }
+
+    #[test]
+    fn empty_search_matches_everyone() {
+        assert!(demo(30, 180, "latino", "dates").matches(&Search::default()));
+        assert!(Demographics::default().matches(&Search::default()));
+    }
+
+    #[test]
+    fn age_range_filters() {
+        let d = demo(30, 180, "latino", "dates");
+        assert!(d.matches(&Search { age_range: Some((25, 35)), ..Default::default() }));
+        assert!(!d.matches(&Search { age_range: Some((18, 25)), ..Default::default() }));
+    }
+
+    #[test]
+    fn unstated_values_never_match_a_criterion() {
+        // Someone who declined to state their age must not be swept into
+        // an age-filtered result set — filtering has to mean what it says.
+        let quiet = Demographics::default();
+        assert!(!quiet.matches(&Search { age_range: Some((18, 99)), ..Default::default() }));
+    }
+
+    #[test]
+    fn text_fields_match_case_insensitively_on_substring() {
+        let d = demo(30, 180, "Latino", "Dates");
+        assert!(d.matches(&Search { ethnicity: Some("latin".into()), ..Default::default() }));
+        assert!(d.matches(&Search { looking_for: Some("DATE".into()), ..Default::default() }));
+        assert!(!d.matches(&Search { ethnicity: Some("nordic".into()), ..Default::default() }));
+    }
+
+    #[test]
+    fn all_criteria_must_hold() {
+        let d = demo(30, 180, "latino", "dates");
+        let q = Search {
+            age_range: Some((25, 35)),
+            ethnicity: Some("nordic".into()),
+            ..Default::default()
+        };
+        assert!(!d.matches(&q), "one failing criterion fails the whole search");
+    }
+
+    #[test]
+    fn free_text_covers_name_bio_and_tags() {
+        let body = ProfileBody {
+            display_name: "Sam".into(),
+            bio: "into bad horror films".into(),
+            tags: vec!["cinema".into()],
+            demographics: demo(30, 180, "latino", "dates"),
+            sequence: 1,
+            ..Default::default()
+        };
+        assert!(body.matches(&Search { text: Some("horror".into()), ..Default::default() }));
+        assert!(body.matches(&Search { text: Some("cinema".into()), ..Default::default() }));
+        assert!(body.matches(&Search { text: Some("sam".into()), ..Default::default() }));
+        assert!(!body.matches(&Search { text: Some("golf".into()), ..Default::default() }));
+    }
+
+    #[test]
+    fn implausible_demographics_rejected() {
+        let mut d = demo(30, 180, "x", "y");
+        d.age = Some(12);
+        assert_eq!(d.validate(), Err(ProfileError::BadAge));
+        let mut d = demo(30, 180, "x", "y");
+        d.height_cm = Some(900);
+        assert_eq!(d.validate(), Err(ProfileError::BadDemographic));
+        let mut d = demo(30, 180, "x", "y");
+        d.ethnicity = Some("z".repeat(MAX_DEMOGRAPHIC_BYTES + 1));
+        assert_eq!(d.validate(), Err(ProfileError::BadDemographic));
+    }
+
+    #[test]
+    fn demographics_are_covered_by_the_signature() {
+        // Editing someone's stated age in transit must break verification.
+        let p = ProfileParams::new(vec![7u8; ML_DSA_65_VK_BYTES]);
+        let mut a = ProfileBody { sequence: 1, ..Default::default() };
+        a.demographics.age = Some(30);
+        let mut b = a.clone();
+        b.demographics.age = Some(21);
+        assert_ne!(
+            a.signing_payload_current(&p).unwrap(),
+            b.signing_payload_current(&p).unwrap()
         );
     }
 }

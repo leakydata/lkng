@@ -8,6 +8,7 @@ fn main() {
         headline: "second user, arriving by delta".into(),
         thumbnail: vec![3u8; 64],
         timestamp_ms: 1_785_525_000_000,
+        age_band: 0,
         verifying_key: None,
         writer_cert: None,
         sig: vec![],

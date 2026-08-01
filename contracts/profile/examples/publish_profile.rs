@@ -12,6 +12,7 @@ fn main() {
         tags: vec!["rust".into(), "p2p".into(), "queer".into()],
         photos: vec![],
         thumbnail: vec![0u8; 96],
+        demographics: Default::default(),
         encryption_key: None,
         sequence: 1,
     };

@@ -138,6 +138,7 @@ mod tests {
             tags: vec!["music".into()],
             photos: vec![],
             thumbnail: vec![1; 32],
+            demographics: Default::default(),
             encryption_key: None,
             sequence: seq,
         }

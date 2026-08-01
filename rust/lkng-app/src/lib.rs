@@ -57,6 +57,8 @@ pub struct Tile {
     /// Which cell this tile came from — `false` when it arrived from a
     /// neighbouring cell rather than your own.
     pub same_cell: bool,
+    /// Coarse age band for filtering; 0 means unstated.
+    pub age_band: u8,
 }
 
 /// Where the user is, expressed only as coarse cells.
@@ -92,6 +94,66 @@ impl Coverage {
             cell_id: self.home.as_str().to_string(),
             epoch: self.epochs[0],
         }
+    }
+}
+
+/// Coarse, filterable attributes carried on a tile.
+///
+/// **Deliberately coarse.** Exact age, height and weight belong to the
+/// profile, which its owner chooses to share. A tile is public to anyone
+/// who subscribes to a cell, so putting precise demographics there would
+/// hand a scraper a dossier on everyone in a neighbourhood. A band is
+/// enough to filter a grid and far less useful to harvest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TileFilters {
+    /// 0 = unstated, else the decade band: 2 = 20s, 3 = 30s, …
+    pub age_band: u8,
+}
+
+impl TileFilters {
+    pub fn from_age(age: Option<u8>) -> Self {
+        Self { age_band: age.map(|a| a / 10).unwrap_or(0) }
+    }
+}
+
+/// What the user wants to see in the grid.
+///
+/// Filtering happens **client-side over already-public data**. It sends
+/// nothing, so nobody learns what you are looking for — which matters more
+/// here than in most apps, since search terms in this category are among
+/// the most sensitive things a person types.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GridFilter {
+    /// Inclusive decade bands, e.g. `(2, 4)` for twenties through forties.
+    pub age_bands: Option<(u8, u8)>,
+    /// Case-insensitive substring over the headline.
+    pub headline: Option<String>,
+    /// Hide tiles from neighbouring cells.
+    pub same_cell_only: bool,
+}
+
+impl GridFilter {
+    pub fn is_empty(&self) -> bool {
+        self.age_bands.is_none() && self.headline.is_none() && !self.same_cell_only
+    }
+
+    fn matches(&self, t: &Tile) -> bool {
+        if self.same_cell_only && !t.same_cell {
+            return false;
+        }
+        if let Some((lo, hi)) = self.age_bands {
+            // Unstated (0) never matches a band filter: a filter that
+            // silently includes people who said nothing is a lie.
+            if t.age_band == 0 || t.age_band < lo || t.age_band > hi {
+                return false;
+            }
+        }
+        if let Some(h) = &self.headline {
+            if !t.headline.to_lowercase().contains(&h.to_lowercase()) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -133,6 +195,32 @@ impl Session {
         self.blocked.contains(pseudonym)
     }
 
+    pub fn unblock(&mut self, pseudonym: &[u8; 32]) {
+        self.blocked.remove(pseudonym);
+    }
+
+    pub fn blocked_count(&self) -> usize {
+        self.blocked.len()
+    }
+
+    /// Serialize the block list for local storage.
+    ///
+    /// Blocks are **device-local and never published**. Putting a block
+    /// list on the network would tell the blocked person they were
+    /// blocked, and hand everyone else a social graph of who avoids whom —
+    /// which for this user base is genuinely dangerous. The cost is that
+    /// blocks do not follow you to a new device unless this blob does; the
+    /// identity backup is the right place for that, not a contract.
+    pub fn export_blocks(&self) -> Vec<[u8; 32]> {
+        let mut v: Vec<[u8; 32]> = self.blocked.iter().copied().collect();
+        v.sort_unstable();
+        v
+    }
+
+    pub fn import_blocks(&mut self, list: impl IntoIterator<Item = [u8; 32]>) {
+        self.blocked.extend(list);
+    }
+
     /// Turn a real position into the coarse cells to watch.
     ///
     /// The only place raw coordinates are touched. Everything downstream
@@ -161,6 +249,19 @@ impl Session {
         thumbnail: Vec<u8>,
         now_ms: u64,
     ) -> Result<PresenceRecord, AppError> {
+        self.compose_tile_with(params, headline, thumbnail, now_ms, TileFilters::default())
+    }
+
+    /// As [`Session::compose_tile`], with the coarse filter attributes
+    /// others will filter your tile by.
+    pub fn compose_tile_with(
+        &self,
+        params: &CellParams,
+        headline: &str,
+        thumbnail: Vec<u8>,
+        now_ms: u64,
+        filters: TileFilters,
+    ) -> Result<PresenceRecord, AppError> {
         if headline.len() > MAX_HEADLINE_BYTES {
             return Err(AppError::HeadlineTooLong);
         }
@@ -172,6 +273,7 @@ impl Session {
             headline: headline.to_string(),
             thumbnail,
             timestamp_ms: now_ms,
+            age_band: filters.age_band,
             verifying_key: None,
             writer_cert: None,
             sig: Vec::new(),
@@ -251,6 +353,7 @@ impl Grid {
                 thumbnail: rec.thumbnail.clone(),
                 timestamp_ms: rec.timestamp_ms,
                 same_cell: params.cell_id == home.as_str(),
+                age_band: rec.age_band,
             };
             // Keep the newest tile per person; ties break on pseudonym so
             // two clients rendering the same bytes agree.
@@ -262,6 +365,11 @@ impl Grid {
             }
         }
         Ok(())
+    }
+
+    /// Tiles matching a filter, in render order.
+    pub fn filtered(&self, filter: &GridFilter) -> Vec<Tile> {
+        self.tiles().into_iter().filter(|t| filter.matches(t)).collect()
     }
 
     /// Tiles ready to render: same-cell before neighbours, then newest
@@ -465,5 +573,141 @@ mod tests {
         for banned in ["distance", "meters", "metres", "feet", "miles", "km"] {
             assert!(!rendered.contains(banned), "tile leaked `{banned}`");
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    const SF: (f64, f64) = (37.7749, -122.4194);
+    const NOW: u64 = 1_785_527_000;
+
+    fn sess(seed: u8) -> Session {
+        Session::new(Identity::from_seed([seed; 32]), [seed ^ 0xFF; 32], Privacy::Km1)
+    }
+
+    fn grid_with(me: &Session, entries: &[(u8, &str, u8, bool)]) -> (Grid, Coverage) {
+        let cov = me.coverage(SF.0, SF.1, NOW).unwrap();
+        let home = cov.publish_target();
+        let nb = CellParams {
+            schema_v: SCHEMA_V,
+            cell_id: cov.cells[1].as_str().to_string(),
+            epoch: cov.epochs[0],
+        };
+        let mut g = Grid::new();
+        for (seed, headline, band, same) in entries {
+            let params = if *same { home.clone() } else { nb.clone() };
+            let them = sess(*seed);
+            let rec = them
+                .compose_tile_with(
+                    &params, headline, vec![*seed; 8], 100,
+                    TileFilters { age_band: *band },
+                )
+                .unwrap();
+            let mut st = CellState::default();
+            st.insert(rec);
+            let mut buf = Vec::new();
+            ciborium::ser::into_writer(&st, &mut buf).unwrap();
+            g.absorb(me, &params, &buf, &cov.home).unwrap();
+        }
+        (g, cov)
+    }
+
+    #[test]
+    fn empty_filter_shows_everything() {
+        let me = sess(1);
+        let (g, _) = grid_with(&me, &[(10, "a", 2, true), (11, "b", 4, false)]);
+        assert_eq!(g.filtered(&GridFilter::default()).len(), 2);
+    }
+
+    #[test]
+    fn age_band_range_filters() {
+        let me = sess(2);
+        let (g, _) = grid_with(&me, &[(10, "twenties", 2, true), (11, "forties", 4, true)]);
+        let only_20s = g.filtered(&GridFilter { age_bands: Some((2, 2)), ..Default::default() });
+        assert_eq!(only_20s.len(), 1);
+        assert_eq!(only_20s[0].headline, "twenties");
+    }
+
+    #[test]
+    fn unstated_age_never_matches_a_band_filter() {
+        // A filter that silently includes people who stated nothing is a lie.
+        let me = sess(3);
+        let (g, _) = grid_with(&me, &[(10, "quiet", 0, true)]);
+        assert_eq!(g.filtered(&GridFilter { age_bands: Some((0, 9)), ..Default::default() }).len(), 0);
+        assert_eq!(g.filtered(&GridFilter::default()).len(), 1, "but still visible unfiltered");
+    }
+
+    #[test]
+    fn headline_search_is_case_insensitive() {
+        let me = sess(4);
+        let (g, _) = grid_with(&me, &[(10, "Bad Horror Films", 3, true), (11, "golf", 3, true)]);
+        let hits = g.filtered(&GridFilter { headline: Some("horror".into()), ..Default::default() });
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn same_cell_only_hides_neighbours() {
+        let me = sess(5);
+        let (g, _) = grid_with(&me, &[(10, "here", 3, true), (11, "next door", 3, false)]);
+        let near = g.filtered(&GridFilter { same_cell_only: true, ..Default::default() });
+        assert_eq!(near.len(), 1);
+        assert!(near[0].same_cell);
+    }
+
+    #[test]
+    fn filters_compose_and_all_must_hold() {
+        let me = sess(6);
+        let (g, _) = grid_with(&me, &[
+            (10, "horror fan", 2, true),
+            (11, "horror fan", 4, true),
+            (12, "horror fan", 2, false),
+        ]);
+        let q = GridFilter {
+            age_bands: Some((2, 2)),
+            headline: Some("horror".into()),
+            same_cell_only: true,
+        };
+        assert_eq!(g.filtered(&q).len(), 1, "every criterion must hold");
+    }
+
+    #[test]
+    fn age_band_is_coarse_not_exact() {
+        // The privacy point: a tile carries a decade, never a birthday.
+        for age in [30u8, 31, 39] {
+            assert_eq!(TileFilters::from_age(Some(age)).age_band, 3);
+        }
+        assert_eq!(TileFilters::from_age(None).age_band, 0);
+    }
+
+    #[test]
+    fn blocks_survive_export_and_import() {
+        let mut a = sess(7);
+        a.block([9u8; 32]);
+        a.block([8u8; 32]);
+        let saved = a.export_blocks();
+
+        let mut b = sess(7);
+        assert_eq!(b.blocked_count(), 0);
+        b.import_blocks(saved);
+        assert!(b.is_blocked(&[9u8; 32]) && b.is_blocked(&[8u8; 32]));
+
+        b.unblock(&[9u8; 32]);
+        assert!(!b.is_blocked(&[9u8; 32]));
+        assert_eq!(b.blocked_count(), 1);
+    }
+
+    #[test]
+    fn blocked_tiles_stay_hidden_under_every_filter() {
+        let me_seed = 11u8;
+        let mut me = sess(me_seed);
+        let (g, _) = grid_with(&me, &[(10, "rude person", 3, true)]);
+        let pseudonym = g.tiles()[0].pseudonym;
+        me.block(pseudonym);
+        // Rebuild with the block in place.
+        let (g2, _) = grid_with(&me, &[(10, "rude person", 3, true)]);
+        assert!(g2.filtered(&GridFilter::default()).is_empty());
+        assert!(g2.filtered(&GridFilter { headline: Some("rude".into()), ..Default::default() }).is_empty());
     }
 }
