@@ -1102,12 +1102,34 @@ does, so HTTP caching pinned the app to whatever version it first loaded —
 **including past a security fix**. `LOAD_NO_CACHE` plus `clearCache` on
 start; the content comes from loopback, so caching bought nothing anyway.
 
-### Status: unconfirmed on device
+### Confirmed on device — and the real cause was neither suspect
 
-After all of the above, `shared_prefs/lkng.vault.xml` is still not being
-created on the test phone, so the seal has **not** been observed working
-end to end. The node is healthy and the app runs, so the likely causes are
-the published UI not yet having reached that phone's node, or the bridge
-not being reachable from inside the node's sandbox iframe. Until this is
-confirmed, **the release blocker stands** — the code is right but unproven,
-and an unproven security control is not one.
+`shared_prefs/lkng.vault.xml` now holds `lkng.identity.seed.v1` and
+`lkng.jitter.secret.v1`, written by the WASM through the bridge from
+**inside** the node's sandbox iframe. The seal works end to end.
+
+Both of my hypotheses were wrong, and finding that out took isolating one
+variable at a time:
+
+1. A **Kotlin-only self-test** (seal, unseal, compare — no JavaScript)
+   logged `stored=true roundtrip=true sealed=true`. So `KeyVault` was
+   never the problem.
+2. A **frame probe** reporting what the page could see returned
+   `chrome-error://chromewebdata/`. **The page had never loaded at all.**
+
+The actual bug was a **startup race**: `MainActivity` started the node
+service and called `loadUrl` in the same breath, but the node needs tens of
+seconds to bind its port. Every cold start hit connection-refused. It
+appeared to work only when a node happened to survive from a previous run
+— precisely the case a developer sees constantly and a new user never
+sees. Left in, **the app would have failed on first launch for everyone.**
+
+Fixed by polling loopback until the node answers, showing honest progress
+("Starting your node and joining the network… first run takes about a
+minute") rather than a spinner, and giving up after ~2 minutes with a
+message that admits what happened. Polling rather than a fixed delay
+because a cold, slow or busy phone beats any constant you would pick.
+
+The debug frame probe is gone; the Keystore self-test stays as a startup
+assertion, since it turns a silent security regression — keys quietly
+falling back to web storage — into a visible one.
