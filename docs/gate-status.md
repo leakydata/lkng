@@ -957,3 +957,69 @@ list, settings, profile editing, sign-up and login. Sign-up and login are
 *not* account screens here — there is no account. They are key generation
 into the Keystore and passphrase recovery, which already exist and tested
 in `lkng-identity`; what is missing is the UI.
+
+## Official skills caught a real design error (2026-08-01)
+
+`freenet/freenet-agent-skills` (LGPL, official, updated daily) documents
+the patterns this project spent the session reverse-engineering from
+source. Its `identity-and-addressing.md` **corrected a decision we had
+already shipped**.
+
+We put the full 1952-byte ML-DSA-65 verifying key directly in
+`ProfileParams` and `InboxParams`. The guidance is explicit: *"whatever key
+material you use, keep it out of identifiers and out of routinely
+transmitted parameters."* Parameters travel with **every** GET, PUT and
+subscribe, so ours were ~1979 bytes each. Delta had been showing the right
+shape all along (a short base58 prefix in parameters) and we did not
+follow it.
+
+Now: `params = { schema_v, address: [u8; 16] }` where
+`address = BLAKE3(signing_key)[..16]`, the full key lives in **state**, and
+`verify_state` rejects any state whose key does not hash to the address —
+so the identifier stays self-certifying: given an address you can fetch the
+contract, read the key, and check it yourself with no directory and no
+trusted lookup. `parameters_carry_no_key_material` fails the build if key
+bytes ever reappear there.
+
+**16 bytes is a security parameter, not a UX one.** The property that
+matters is second-preimage resistance: if an attacker can grind a
+*different* keypair hashing to your address, they can serve state at your
+address carrying their key and the binding check passes for both. No
+contract-side tie-break saves this — "first writer wins" is unenforceable
+in a permissionless eventually-consistent store, and any deterministic
+ordering on key bytes is itself grindable. Length is the only defence, so
+handles went from ~12 to ~22 characters on purpose.
+
+**And it solved the rotation problem Atlas raised.** Derive the address
+from the **signing key only**, keep the encryption key as ordinary signed
+state — then a user can rotate their encryption key without their address,
+or anyone's link to them, changing.
+
+## Account transfer to a new phone
+
+Three paths, deliberately distinct:
+
+1. **Passphrase recovery over Freenet — no file, no cloud.** The identity
+   is a 32-byte seed; `backup_locator(passphrase)` addresses a contract
+   derived from the passphrase alone. Install on a new phone, type the
+   passphrase, fetch, decrypt. The network is the backup.
+2. **An encrypted file the user can put anywhere**, Google Drive included.
+   `to_backup_with` now seals the seed **and an opaque application blob**
+   (favourites, notes, blocks) in one file. The blob is opaque on purpose:
+   the crate holding key material must not grow a dependency on
+   application types to move somebody's notes.
+3. **Automatic cloud backup: deliberately not enabled.** `allowBackup` is
+   `false`, so Android will never sweep identity keys into a cloud backup
+   the user never thought about. An explicit, user-initiated export to
+   Drive is a different act from a silent one, and only the first is
+   theirs to consent to.
+
+**Chat history comes back for free.** Messages live in the inbox contract
+on the network, encrypted to the identity — so restoring the seed restores
+the ability to read whatever is still there. No separate chat backup, and
+nothing to opt into.
+
+The honest caveat, already in the code: a weak passphrase is
+brute-forceable offline by anyone who guesses the derivation, which is why
+Argon2id runs at 64 MiB / 3 passes and the UI must enforce a strength
+meter.

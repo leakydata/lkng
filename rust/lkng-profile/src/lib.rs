@@ -947,10 +947,40 @@ mod tests {
     }
 
     #[test]
-    fn handle_is_short_and_stable() {
+    fn handle_is_shareable_and_stable() {
         let p = params();
-        assert_eq!(p.handle(), params().handle());
-        assert!(p.handle().len() <= 12);
+        assert_eq!(p.handle(), params().handle(), "handles must be stable");
+        // base58 over 16 bytes lands around 22 characters. Longer than a
+        // 10-char handle would be, and deliberately so: the length IS the
+        // second-preimage defence, and a shorter address is one an
+        // attacker can grind a colliding key for. Still short enough to
+        // read aloud or put in a bio.
+        let h = p.handle();
+        assert!((20..=24).contains(&h.len()), "unexpected handle length: {h}");
+        assert!(h.chars().all(|c| c.is_ascii_alphanumeric()), "base58 is alphanumeric");
+    }
+
+    #[test]
+    fn a_different_key_gets_a_different_address() {
+        let a = ProfileParams::new(vec![1u8; ML_DSA_65_VK_BYTES]);
+        let b = ProfileParams::new(vec![2u8; ML_DSA_65_VK_BYTES]);
+        assert_ne!(a.address, b.address);
+        assert_ne!(a.handle(), b.handle());
+    }
+
+    #[test]
+    fn parameters_carry_no_key_material() {
+        // The whole point of the address indirection: parameters travel on
+        // every GET, PUT and subscribe, so a 1952-byte key must not be in
+        // them.
+        let p = ProfileParams::new(vec![9u8; ML_DSA_65_VK_BYTES]);
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&p, &mut buf).unwrap();
+        assert!(buf.len() < 64, "params ballooned to {} bytes", buf.len());
+        assert!(
+            !buf.windows(32).any(|w| w == [9u8; 32]),
+            "raw key material leaked into parameters"
+        );
     }
 
     #[test]
