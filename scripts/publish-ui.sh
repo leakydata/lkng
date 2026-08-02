@@ -56,6 +56,22 @@ PY
 grep -q "\"$MARKER\";" web/src/main.rs \
   || { echo "FAIL: marker stamp did not apply" >&2; exit 1; }
 
+# Contracts first, always.
+#
+# The web bundle embeds the compiled contracts with `include_bytes!`, and a
+# contract's key is BLAKE3(BLAKE3(wasm) || params) -- so a stale embedded
+# wasm means the app addresses contracts that no longer exist, and every
+# read comes back empty. Building in the other order produces a UI that
+# looks perfectly healthy and can talk to nobody.
+echo "==> building contracts"
+for c in presence-cell inbox profile; do
+  [ -d "$ROOT/contracts/$c" ] || continue
+  ( cd "$ROOT/contracts/$c" \
+    && CARGO_TARGET_DIR="$PWD/target" cargo build --release \
+         --target wasm32-unknown-unknown >/dev/null 2>&1 ) \
+    || { echo "FAIL: contract $c did not build" >&2; exit 1; }
+done
+
 echo "==> building UI (marker $MARKER)"
 rm -rf "$ROOT/web/target/dx/lkng-web/release"
 ( cd web && dx bundle --platform web --release >/dev/null )

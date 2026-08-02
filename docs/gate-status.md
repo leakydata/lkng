@@ -1250,3 +1250,49 @@ no adb, which is also how a real user would have to answer it.
 **Correction to the record:** the earlier gate-status claim that Freenet
 contract self-update is broken is withdrawn. It was never tested — the same
 bytes were being published each time, so of course nothing changed.
+
+## 2026-08-01 — messaging, and two more build-ordering traps
+
+**Tab bar restored.** Removing it when the avatar menu landed was a
+misreading of the request: Grindr has both, and they answer different
+questions. The tab bar switches between *what you do* (browse, taps,
+messages, albums); the avatar menu holds *who you are* (profile, settings).
+Merging them made the frequent action slower and the rare one easier to hit
+by accident.
+
+**Per-epoch encryption key on presence records.** A stranger has to be able
+to encrypt a first message, and there is no handshake to piggyback on, so
+the key must be public — a tile is exactly that. It is derived from the
+**epoch** identity, not the durable one. A durable key here would have
+silently undone pseudonym rotation entirely: a scraper joining every cell
+could record it and link one person across every epoch and area they ever
+appeared in, a permanent identifier wearing the costume of a rotating one.
+Two guard tests hold the line: `encryption_key_rotates_with_the_epoch` and
+`a_swapped_encryption_key_breaks_the_tile_signature` (the second because an
+unsigned key would let anyone who can write to a cell substitute their own
+and read every "encrypted" reply).
+
+**Sample profiles cannot be messaged.** Demo tiles are built through the
+real signing path, so they now carry real encryption keys — derived from
+constant seeds compiled into the binary and therefore known to anyone with
+the source. Sealing to one would look like encryption and be publicly
+readable, which is worse than refusing, because the user would believe it
+was private. The Message button is disabled with the reason stated.
+
+**Two ordering bugs, same shape as the stale bundle:**
+
+1. `sed` replacement text containing `&str` -- `&` means "the whole match"
+   in a sed replacement, so the marker line was spliced into itself. It was
+   caught only because the corruption happened to break the parse. Had the
+   marker lived in a string that still compiled, the verification script
+   would have gone on certifying builds while corrupting the file it checked.
+   Now done in python.
+2. The web bundle embeds contracts via `include_bytes!`, and a contract key
+   is `BLAKE3(BLAKE3(wasm) || params)`. Building the UI before the contracts
+   ships an app that addresses contracts which do not exist -- it looks
+   completely healthy and can talk to nobody. `publish-ui.sh` now builds
+   contracts first, unconditionally.
+
+All three of today's bugs were the same bug: **a build step that silently
+produced something other than what the source said.** None was a logic
+error, and none would have been found by reading the code.
