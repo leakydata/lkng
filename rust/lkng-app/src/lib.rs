@@ -1223,3 +1223,109 @@ mod publish_gate_tests {
         }
     }
 }
+
+/// The 18+ gate.
+///
+/// # What this is, and what it is not
+///
+/// It is a **declaration**, not verification. Someone who wants to lie can
+/// lie, here as in every app in this category. Saying so plainly matters
+/// more than usual, because the alternative — implying that a self-declared
+/// birth date keeps minors out — is the claim that lets everyone stop
+/// thinking about it.
+///
+/// Real age *verification* would mean a document check, which means an
+/// identity provider, which means exactly the central party this project
+/// exists without. There is no decentralised answer to this today (see
+/// PLAN.md, risk 12). The position taken here is: gate honestly, record the
+/// declaration locally, publish nothing about it, and say what it is worth.
+///
+/// # Why the date, and not a checkbox
+///
+/// A tickbox reading "I am 18" is answered reflexively and means nothing.
+/// A birth date has to be composed, and it produces an answer the app can
+/// check arithmetic on — which is also why the date never leaves the device:
+/// it is a more identifying thing than a tick, so it is stored locally and
+/// published nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgeCheck {
+    Ok,
+    /// Under 18 by the declared date.
+    TooYoung,
+    /// Not a date, or a date in the future.
+    Invalid,
+}
+
+/// Minimum age, in years.
+pub const MIN_AGE: u32 = 18;
+
+/// Check a declared birth date against today.
+///
+/// Both dates are `(year, month, day)`. Taking "today" as an argument rather
+/// than reading a clock keeps this a pure function — a date check that
+/// consults the system clock cannot be tested at a boundary, and the
+/// boundary is the only interesting case.
+pub fn check_age(born: (i32, u32, u32), today: (i32, u32, u32)) -> AgeCheck {
+    let (by, bm, bd) = born;
+    let (ty, tm, td) = today;
+    if bm == 0 || bm > 12 || bd == 0 || bd > 31 || by < 1900 {
+        return AgeCheck::Invalid;
+    }
+    if (by, bm, bd) > (ty, tm, td) {
+        return AgeCheck::Invalid;
+    }
+    // Whole years elapsed: subtract one if this year's birthday has not
+    // happened yet. Comparing the (month, day) tuple handles that without
+    // any calendar arithmetic, and is correct on the birthday itself.
+    let mut years = ty - by;
+    if (tm, td) < (bm, bd) {
+        years -= 1;
+    }
+    if years >= MIN_AGE as i32 {
+        AgeCheck::Ok
+    } else {
+        AgeCheck::TooYoung
+    }
+}
+
+#[cfg(test)]
+mod age_tests {
+    use super::*;
+
+    #[test]
+    fn the_day_before_the_eighteenth_birthday_is_too_young() {
+        assert_eq!(check_age((2008, 8, 2), (2026, 8, 1)), AgeCheck::TooYoung);
+    }
+
+    /// The boundary itself. An off-by-one here either locks out adults on
+    /// their birthday or lets minors in a day early; both are the kind of
+    /// bug that survives because nobody tests the exact day.
+    #[test]
+    fn the_eighteenth_birthday_itself_is_old_enough() {
+        assert_eq!(check_age((2008, 8, 1), (2026, 8, 1)), AgeCheck::Ok);
+    }
+
+    #[test]
+    fn comfortably_older_is_fine() {
+        assert_eq!(check_age((1980, 12, 31), (2026, 8, 1)), AgeCheck::Ok);
+    }
+
+    #[test]
+    fn a_birthday_later_this_year_has_not_happened_yet() {
+        assert_eq!(check_age((2008, 12, 1), (2026, 8, 1)), AgeCheck::TooYoung);
+    }
+
+    /// A future birth date is not a young user; it is a broken input, and
+    /// treating it as "too young" would send someone to the wrong message.
+    #[test]
+    fn a_future_date_is_invalid_not_young() {
+        assert_eq!(check_age((2030, 1, 1), (2026, 8, 1)), AgeCheck::Invalid);
+    }
+
+    #[test]
+    fn nonsense_dates_are_invalid() {
+        assert_eq!(check_age((2000, 13, 1), (2026, 8, 1)), AgeCheck::Invalid);
+        assert_eq!(check_age((2000, 1, 0), (2026, 8, 1)), AgeCheck::Invalid);
+        assert_eq!(check_age((1600, 1, 1), (2026, 8, 1)), AgeCheck::Invalid);
+    }
+}
