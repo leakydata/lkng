@@ -95,43 +95,90 @@ this category, so there is a test that fails the build if a distance field
 appears in the render model.
 
 Other properties, each demonstrated against real network bytes rather than
-asserted:
+asserted — the examples in
+[`rust/lkng-transport-freenet/examples/`](rust/lkng-transport-freenet/examples/)
+run them against mainnet:
 
 - **Tiles are signed by per-epoch subkeys**, so scraping a cell yields
-  rotating pseudonyms and no route to anyone's durable profile.
-- **Profiles are revealed by their owner**, and only then can someone be
-  messaged.
-- **Messages are ECIES-encrypted** (ephemeral X25519 → HKDF →
-  XChaCha20-Poly1305) and signed with ML-DSA-65; an envelope is bound to
-  its recipient so "they messaged you" cannot be forged.
-- **HIV status never touches a public tile** — enforced by a test that
-  scans serialized tile bytes for clinical terms, not by convention.
-- **Favourites, notes and blocks never leave the device** except inside the
-  passphrase-encrypted backup.
+  rotating pseudonyms and no route to anyone's durable profile. The
+  encryption key on a tile rotates too — a durable one there would have made
+  rotation cosmetic, letting a scraper link a person across every epoch and
+  area they ever appeared in.
+- **You can message someone from their tile alone**, with no profile
+  exchanged and no handshake. ECIES (ephemeral X25519 → HKDF →
+  XChaCha20-Poly1305), signed with ML-DSA-65, and an envelope is bound to
+  its recipient's inbox so it cannot be replayed into anyone else's.
+- **Taps are indistinguishable from messages on the wire**, so nobody
+  replicating an inbox can tell who tapped whom.
+- **Album photos are ciphertext on the network.** Anyone may fetch an album;
+  only people the owner named can open it. The key travels in an inbox
+  envelope, so nobody can tell an album was shared, with whom, or that one
+  exists.
+- **HIV status never touches a public tile** — enforced by a test that scans
+  serialized tile bytes for clinical terms, not by convention.
+- **Favourites, notes, blocks and sent messages never leave the device**
+  except inside the passphrase-encrypted backup. There is deliberately no
+  "sent" contract: one would publish a list of everyone you have messaged.
+- **Reports are counted by reporter, not by report**, so one determined
+  person cannot manufacture the appearance of consensus against someone.
 
 ## What actually works
 
 | Component | State |
 | --- | --- |
 | Freenet node on Android | **Works**, relaying live traffic |
-| Contracts on mainnet | **Works** — presence, profile, inbox |
-| Encrypted messaging | **Works** end to end over the network |
+| Contracts on mainnet | **Works** — presence, profile, inbox, moderation, album |
+| Encrypted messaging | **Works** — tile → sealed message → read, no profile needed |
+| Taps | **Works** |
 | Grid UI | **Works**, served *from* Freenet, self-updating |
-| Per-install identity | **Works** — but the seed is in `localStorage`, not the Keystore |
-| Onboarding, profile editor | **Missing** |
-| Real GPS | **Missing** — location is hard-coded |
-| Photos, albums | **Missing** |
+| Photos on tiles | **Works** — EXIF stripped by canvas re-encode |
+| Private albums | **Works** — share, receive, prospective revocation |
+| Reporting and blocking | **Works** — blocking is local and immediate |
+| Per-install identity | **Works** — sealed by the Android Keystore |
+| Profile editor | **Works** |
+| Real location | **Works** — coarse device fix, or set by hand |
+| Age gate | **Works** — self-declared, and the app says so |
+| Onboarding | **Partial** — age gate then the grid; no guided setup |
+| Recovery backup UI | **Missing** — the format and crypto exist, the screen does not |
+| Battery/Doze measurement | **Missing** — short runs look fine; that is a different claim |
 
-**Do not use this as a dating app yet.** It cannot protect anyone until the
-identity seed is behind the Android Keystore and real onboarding exists.
+### What "works" means here, and what it does not
+
+Every row above is exercised by a test, and most by an example that runs
+against mainnet. But **the app has not been used by two real people on two
+real phones**, and until it has, treat "works" as "the mechanism is proven,
+the product is not".
+
+**Do not use this as a dating app yet.** The specific gaps that matter:
+
+- losing the phone loses the account — the recovery bundle format exists and
+  is tested, but nothing in the UI creates one yet;
+- nobody has measured what the node does to a battery over a day;
+- a public photo grid is scrapeable and face matching defeats pseudonym
+  rotation, which is true of every app in this category and is stated in
+  [`docs/anonymity-limitations.md`](docs/anonymity-limitations.md) rather
+  than glossed.
 
 ## Building
 
 ```bash
-cargo test --workspace          # 121 tests, no network needed
+cargo test --workspace          # 161 tests, no network needed
 cd web && dx serve              # the UI against an in-memory backend
 cd android && gradle assembleDebug
+scripts/publish-ui.sh           # build contracts, then the UI, then publish
 ```
+
+**Use `scripts/publish-ui.sh` rather than running `dx bundle` by hand.** It
+stamps a marker into the source and refuses to publish if that marker is
+absent from the compiled wasm. That is not ceremony: `dx bundle --release`
+re-emitted a previous build's wasm while reporting success, and cost most of
+a day of diagnosing a phone that was doing exactly what it was told. The
+marker is rendered in the app footer, so "is this device running the new
+build?" is answerable by looking at the screen.
+
+The Android build pins JDK 21 in `gradle.properties`. Kotlin 2.0.21 throws on
+a JVM version string of `25.0.3` — and because outputs were up to date,
+gradle reported BUILD SUCCESSFUL while silently handing back an older APK.
 
 Contracts need the `wasm32-unknown-unknown` target and
 [`fdev`](https://freenet.org/dev/). Each contract is its own workspace
