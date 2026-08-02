@@ -1862,3 +1862,47 @@ because "our app is slow" is not an upstream bug report.
 Worth noting why this went unseen: on a desktop, 41% of a core is invisible.
 It is only a phone that makes this the difference between a viable background
 service and one users uninstall.
+
+## 2026-08-02 — memory and CPU are climbing, cause not yet established
+
+The `summarize_state` fix did **not** reduce measured CPU. Both numbers went
+the other way over 90 minutes:
+
+```text
+23:05   41.6% of one core   rss 275 MB
+23:20   49.0%               rss 292 MB
+23:35   61.0%               rss 345 MB
+23:50   59.4%               rss 434 MB
+00:10   53.5%               rss 580 MB
+```
+
+Now `VmRSS 604 MB`, `VmHWM 685 MB`, 16 threads, still rising. On a 7.4 GB
+device with 2.6 GB free this is survivable; on a 4 GB phone it would not be.
+
+**The honest position: I cannot yet attribute this.** The inflection at
+~23:15 coincides exactly with when I began republishing frequently. Across
+tonight I published roughly a dozen UI contract versions (2.7 MB each) and
+ran the mainnet smoke suite several times, creating presence, inbox,
+moderation and album contracts. A node that retains those is doing what it
+was asked to do, and my activity is nothing like a real user's.
+
+So there are two live hypotheses and no evidence separating them:
+
+1. the node accumulates contract state without shedding it, and would do
+   this to any user over time;
+2. I created an unusual number of contracts in 90 minutes and the node is
+   holding them exactly as designed.
+
+**The experiment that distinguishes them costs only patience**: stop all
+publishing and testing, leave the node completely idle, and watch. If RSS
+keeps climbing with no new contracts arriving, it is (1). If it plateaus, it
+is (2) and the earlier numbers were an artefact of how I was working.
+
+Recording this before knowing the answer, because the temptation to write
+"probably just my testing" and move on is exactly how the 31 MB figure
+survived for weeks.
+
+The `summarize_state` fix stands on its own merits regardless — decoding
+16 KiB thumbnails to collect map keys was wasteful at any call rate — but it
+is not yet shown to have changed anything measurable, and should not be
+described as though it had.
