@@ -159,6 +159,13 @@ impl Identity {
     ) -> Result<(), IdentityError> {
         record.pseudonym = self.pseudonym();
         record.verifying_key = Some(self.verifying_key_bytes());
+        // Set here rather than by the caller, for the same reason the
+        // pseudonym is: `self` is already the *epoch* key, so the published
+        // encryption key cannot drift from the key that signed the tile.
+        // A caller-supplied field could be a durable key by accident, and
+        // that single mistake would make one person linkable across every
+        // epoch — silently, and only visible to someone scraping cells.
+        record.encryption_key = Some(self.encryption_public_key().to_vec());
         let payload = record.signing_payload(params)?;
         let sig: Signature<MlDsa65> = self
             .signing

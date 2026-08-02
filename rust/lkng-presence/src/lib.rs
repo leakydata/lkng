@@ -59,6 +59,12 @@ pub const MAX_THUMBNAIL_BYTES: usize = 16 * 1024;
 pub const MAX_SIG_BYTES: usize = 4096;
 /// Reserved writer-cert slot cap.
 pub const MAX_WRITER_CERT_BYTES: usize = 8192;
+
+/// An X25519 public key is exactly 32 bytes. Checked as an equality rather
+/// than a ceiling: this field is multiplied by every record in every cell,
+/// and "at most N" would let a writer pad it into the state budget that
+/// everyone nearby pays to download.
+pub const ENCRYPTION_KEY_BYTES: usize = 32;
 /// Encoded ML-DSA-65 verifying key length (FIPS 204).
 pub const ML_DSA_65_VK_BYTES: usize = 1952;
 
@@ -91,6 +97,8 @@ pub enum PresenceError {
     MalformedSignature,
     #[error("writer cert exceeds {MAX_WRITER_CERT_BYTES} bytes")]
     WriterCertTooLarge,
+    #[error("encryption key must be exactly {ENCRYPTION_KEY_BYTES} bytes")]
+    MalformedEncryptionKey,
     #[error("verifying key is not a valid ML-DSA-65 key")]
     BadVerifyingKey,
     #[error("encode: {0}")]
@@ -134,6 +142,33 @@ pub struct PresenceRecord {
     /// second lookup that might silently fail.
     #[serde(default, with = "serde_bytes")]
     pub verifying_key: Option<Vec<u8>>,
+    /// X25519 public key that a first message to this person is encrypted
+    /// to (32 B).
+    ///
+    /// ## Why a public key sits on a public tile
+    ///
+    /// Someone who has never met you must be able to encrypt the *first*
+    /// message; there is no handshake to piggyback on, and no server to ask.
+    /// So the key has to be published where strangers can see it — which is
+    /// exactly what a tile is.
+    ///
+    /// ## Why it is a per-epoch key, and why that is load-bearing
+    ///
+    /// It is derived from the **epoch** identity, not the durable one, so it
+    /// rotates in lockstep with [`pseudonym`](Self::pseudonym). A durable
+    /// encryption key here would have quietly undone the entire rotation
+    /// design: a scraper could join every cell, record the key, and link one
+    /// person across every epoch and every area they ever appeared in — a
+    /// permanent identifier volunteered in public, wearing the costume of a
+    /// rotating one. Rotating it means this field reveals no more than the
+    /// epoch verifying key already beside it.
+    ///
+    /// The cost is honest and bounded: an envelope sealed to an old epoch
+    /// key can still be opened, because epoch keys are *derived* from the
+    /// master seed rather than discarded — so nothing is lost when the epoch
+    /// turns over, and there is no forward secrecy claim being made here.
+    #[serde(default, with = "serde_bytes")]
+    pub encryption_key: Option<Vec<u8>>,
     /// RESERVED write-gating slot (AFT token / Ghost Key cert). Always
     /// `None` in v1; validated for size so a future value can't bloat state.
     #[serde(default, with = "serde_bytes")]
@@ -159,6 +194,11 @@ impl PresenceRecord {
         if let Some(cert) = &self.writer_cert {
             if cert.len() > MAX_WRITER_CERT_BYTES {
                 return Err(PresenceError::WriterCertTooLarge);
+            }
+        }
+        if let Some(k) = &self.encryption_key {
+            if k.len() != ENCRYPTION_KEY_BYTES {
+                return Err(PresenceError::MalformedEncryptionKey);
             }
         }
         if let Some(vk) = &self.verifying_key {
@@ -207,6 +247,11 @@ impl PresenceRecord {
             position: u8,
             writer_cert: Option<&'a [u8]>,
             verifying_key: Option<&'a [u8]>,
+            // Bound into the signature, so a relay cannot swap in its own
+            // key and harvest plaintext-for-them from anyone who replies.
+            // An unsigned encryption key would make every "encrypted"
+            // first message readable by whoever last touched the state.
+            encryption_key: Option<&'a [u8]>,
         }
         let scoped = Scoped {
             domain: SIG_DOMAIN,
@@ -221,6 +266,7 @@ impl PresenceRecord {
             position: self.position,
             writer_cert: self.writer_cert.as_deref(),
             verifying_key: self.verifying_key.as_deref(),
+            encryption_key: self.encryption_key.as_deref(),
         };
         let mut buf = Vec::new();
         ciborium::ser::into_writer(&scoped, &mut buf)

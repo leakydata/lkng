@@ -307,6 +307,10 @@ impl Session {
             age_band: filters.age_band,
             position: filters.position,
             verifying_key: None,
+            // Both filled in by `sign_presence`, from the epoch key, so they
+            // are guaranteed to describe the signer rather than whatever the
+            // caller happened to have to hand.
+            encryption_key: None,
             writer_cert: None,
             sig: Vec::new(),
         };
