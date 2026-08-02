@@ -72,6 +72,17 @@ pub struct Tile {
     /// degraded mode here, because a plaintext first message on this network
     /// is public forever.
     pub encryption_key: Option<[u8; 32]>,
+    /// The epoch verifying key that signed the record (1952 B).
+    ///
+    /// Kept because a message has to be *addressed*: the recipient's inbox
+    /// contract is derived from this key, and the tile otherwise carries
+    /// only `pseudonym`, which is a hash and cannot be inverted.
+    ///
+    /// It costs roughly 2 KB per tile held in memory, which at the 500-record
+    /// cap is about 1 MB — paid knowingly, because the alternative is
+    /// re-fetching cell state at the moment someone taps "message", where a
+    /// failure would read as the app being broken.
+    pub verifying_key: Option<Vec<u8>>,
 }
 
 /// Where the user is, expressed only as coarse cells.
@@ -408,6 +419,7 @@ impl Grid {
                     .encryption_key
                     .as_deref()
                     .and_then(|k| <[u8; 32]>::try_from(k).ok()),
+                verifying_key: rec.verifying_key.clone(),
             };
             // Keep the newest tile per person; ties break on pseudonym so
             // two clients rendering the same bytes agree.
