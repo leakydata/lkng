@@ -1365,3 +1365,41 @@ bytes that every phone in the cell downloads.
 The UI now states plainly whether you are visible and, if not, why. The
 condition is computed once and shared with the publisher, so the app cannot
 claim a visibility it has not acted on.
+
+## 2026-08-01 — presence publishing was broken the moment it was written
+
+`two_apps` was written to exercise the app's actual write path —
+**seed-then-update** — because `two_strangers` and `tile_to_message` both
+prove discovery via a single PUT of a full cell state, which is not what the
+app does. It found two bugs on its first two runs.
+
+**1. The delta was the wrong shape.** `publish_presence` encoded a
+`CellState` (a CBOR map). The contract decodes `Vec<PresenceRecord>` and
+rejects anything else:
+
+```text
+delta: Semantic(None, "invalid type: map, expected array")
+```
+
+So the tile never landed. Nothing in the app reported this: the update was
+dispatched, the UI said "You're visible", and the write failed inside the
+contract. `Session::tile_delta` — the correct encoder — already existed in
+`lkng-app` and was simply not used. The feature was broken from the moment
+it was written, a few hours earlier, in the same session that had just
+finished writing up why unverified write paths are dangerous.
+
+**2. An unconditional seed on a republish timer.** `publish_presence` PUT a
+full contract container every four minutes, forever, for a contract that
+already existed. In the examples' demux a timed-out PUT kills the whole
+session; in the browser client it is only recorded as `last_error`, so the
+app survived it — and would have gone on quietly pushing a contract
+container into the network on a timer, paid for by every peer nearby, with
+no symptom at all. Now `Node::seed_once`.
+
+**The lesson, which is the same one as this morning's stale bundle:** both
+bugs were in code that had been read carefully, reviewed against the
+contract, and reasoned about correctly at every step except the one that
+mattered. Neither was visible from the source. Both took about ninety
+seconds to find once something actually ran the path end to end.
+
+Reading is not verification. An example that exercises the real path is.

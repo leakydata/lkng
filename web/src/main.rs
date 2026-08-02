@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b33708";
+pub const BUILD_MARKER: &str = "b34151";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -1252,8 +1252,23 @@ fn publish_presence(
     // commutative merge, so doing both is safe rather than wasteful.
     let mut state = CellState::default();
     state.insert(rec.clone());
-    node.seed(CELL_WASM, &params_bytes, cbor(&state));
-    node.update(key, cbor(&state));
+    // Seed only if this cell is new to us; the update is what carries the
+    // tile either way. Re-seeding on every republish would push a whole
+    // contract container into the network every few minutes for a contract
+    // that already exists — paid for by every peer near us.
+    node.seed_once(CELL_WASM, &params_bytes, cbor(&state));
+
+    // The delta is a **list of records**, not a CellState. The contract
+    // decodes `Vec<PresenceRecord>` and rejects a map outright:
+    //
+    //   delta: Semantic(None, "invalid type: map, expected array")
+    //
+    // Encoding it as state here silently published nothing — the write was
+    // dispatched, the UI reported success, and the tile never landed.
+    // `Session::tile_delta` is the encoder that gets this right; use it
+    // rather than reconstructing the shape.
+    let delta = session.tile_delta(&rec).map_err(|e| e.to_string())?;
+    node.update(key, delta);
     Ok(())
 }
 
@@ -1288,7 +1303,7 @@ fn send_message(
 
     // Empty starting state, so the update has a contract to land in.
     let empty = lkng_inbox::InboxState::default();
-    node.seed(INBOX_WASM, &params_bytes, cbor(&empty));
+    node.seed_once(INBOX_WASM, &params_bytes, cbor(&empty));
 
     // The delta is a state carrying exactly this envelope; the contract
     // merges it in. Deltas are self-contained for the same reason presence

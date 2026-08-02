@@ -26,5 +26,6 @@ serde = { version = "1", features = ["derive"] }
 lkng-profile = { path = "../lkng-profile" }
 lkng-location = { path = "../lkng-location" }
 lkng-transport-mock = { path = "../lkng-transport-mock" }
+lkng-app = { path = "../lkng-app" }
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = "0.3"

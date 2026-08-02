@@ -155,6 +155,31 @@ impl Node {
 
     /// Seed PUT — the step that makes later updates possible for a
     /// contract this node does not host.
+    /// Seed a contract, but only the first time.
+    ///
+    /// Seeding exists to make a contract *exist* so a following update has
+    /// somewhere to land. Once we have seen state for it, repeating the PUT
+    /// buys nothing and costs everyone: presence is republished every few
+    /// minutes, so an unconditional seed is a full contract container
+    /// pushed into the network on a timer, forever, for a contract that is
+    /// already there.
+    ///
+    /// Returns whether the seed was actually sent, so callers can tell
+    /// "already present" from "just created" without asking again.
+    pub fn seed_once(&self, code: &[u8], params: &[u8], state: Vec<u8>) -> bool {
+        let key = Self::key_for(code, params);
+        let id = *key.id();
+        {
+            let inbox = self.inbox.borrow();
+            if inbox.seeded.contains(&id) || inbox.states.contains_key(&id) {
+                return false;
+            }
+        }
+        self.inbox.borrow_mut().seeded.push(id);
+        self.seed(code, params, state);
+        true
+    }
+
     pub fn seed(&self, code: &[u8], params: &[u8], state: Vec<u8>) {
         let container = ContractContainer::from(ContractWasmAPIVersion::V1(WrappedContract::new(
             std::sync::Arc::new(ContractCode::from(code.to_vec())),
