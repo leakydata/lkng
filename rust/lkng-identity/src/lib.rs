@@ -176,6 +176,38 @@ impl Identity {
         Ok(())
     }
 
+    /// Sign a report for a specific feed, filling in `verifying_key` and
+    /// `sig`.
+    ///
+    /// Takes `&self` and signs with **this** key, unlike `sign_presence`
+    /// which always derives an epoch subkey internally. That difference is
+    /// deliberate and the caller must respect it: a report signed with the
+    /// durable identity would put that identity into a public feed, tying
+    /// every report a person ever files to one permanent key — and, through
+    /// it, to their profile address. Callers pass `identity.for_epoch(e)`.
+    ///
+    /// It is not derived here because a report is not scoped to an epoch the
+    /// way a tile is: the feed parameters carry no epoch, so there would be
+    /// no correct value to derive from. Making the caller choose is the
+    /// honest option; hiding it would mean guessing.
+    pub fn sign_report(
+        &self,
+        report: &mut lkng_moderation::Report,
+        params: &lkng_moderation::FeedParams,
+    ) -> Result<(), IdentityError> {
+        report.verifying_key = Some(self.verifying_key_bytes());
+        let payload = report
+            .signing_payload(params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = self
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        report.sig = sig.encode().to_vec();
+        Ok(())
+    }
+
     /// Parameters addressing this identity's profile contract. The address
     /// IS the durable identity, so nobody else can occupy it — and because
     /// tiles are signed by epoch subkeys, scraping a cell never leads here.

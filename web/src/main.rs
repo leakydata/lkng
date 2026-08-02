@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b34151";
+pub const BUILD_MARKER: &str = "b34857";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -54,6 +54,66 @@ const CELL_WASM: &[u8] = include_bytes!(
 const INBOX_WASM: &[u8] = include_bytes!(
     "../../contracts/inbox/target/wasm32-unknown-unknown/release/inbox_contract.wasm"
 );
+
+/// Compiled moderation-feed contract.
+const FEED_WASM: &[u8] = include_bytes!(
+    "../../contracts/moderation/target/wasm32-unknown-unknown/release/moderation_contract.wasm"
+);
+
+/// The feed a report goes to, and the one subscribed by default.
+///
+/// A single named feed rather than a global list, because "the feed" is a
+/// choice the user should be able to change. Today there is one and it is
+/// on by default; the contract shape means a second one costs nothing but a
+/// name, and nobody has to be appointed to run either.
+const BASELINE_FEED: &str = "baseline";
+
+fn feed_params() -> lkng_moderation::FeedParams {
+    lkng_moderation::FeedParams { schema_v: SCHEMA_V, feed: BASELINE_FEED.to_string() }
+}
+
+/// File a signed report about a pseudonym.
+///
+/// Signed with the **epoch** identity, never the durable one: a report
+/// carries its verifying key in public, and signing with the durable key
+/// would tie every report a person ever files to one permanent identity —
+/// and through it to their profile address.
+fn send_report(
+    node: &Node,
+    session: &Session,
+    epoch: u64,
+    subject: [u8; 32],
+    reason: lkng_moderation::Reason,
+    note: &str,
+) -> Result<(), String> {
+    let params = feed_params();
+    let mut report = lkng_moderation::Report {
+        subject,
+        reason: reason.code(),
+        note: note.chars().take(280).collect(),
+        timestamp_ms: now_unix() * 1000,
+        verifying_key: None,
+        sig: Vec::new(),
+    };
+    session
+        .identity()
+        .for_epoch(epoch)
+        .sign_report(&mut report, &params)
+        .map_err(|e| e.to_string())?;
+
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(FEED_WASM, &params_bytes);
+
+    let mut seed_state = lkng_moderation::FeedState::default();
+    seed_state.insert(report.clone());
+    node.seed_once(FEED_WASM, &params_bytes, cbor(&seed_state));
+
+    // A list of reports, which is what the contract decodes as a delta.
+    // Encoding the FeedState map here would be rejected exactly as the
+    // presence delta was.
+    node.update(key, cbor(&vec![report]));
+    Ok(())
+}
 
 fn main() {
     dioxus::launch(App);
@@ -739,6 +799,8 @@ fn App() -> Element {
     let mut compose = use_signal(String::new);
     let mut send_error = use_signal(|| None::<String>);
     let mut tapped = use_signal(|| false);
+    let mut reporting = use_signal(|| None::<[u8; 32]>);
+    let mut report_done = use_signal(|| false);
     let visible: Vec<Tile> = tiles
         .into_iter()
         .filter(|t| !blocked.read().contains(&t.pseudonym))
@@ -1131,11 +1193,75 @@ fn App() -> Element {
                             },
                             "Block"
                         }
+                        button {
+                            class: "linkish",
+                            onclick: move |_| {
+                                reporting.set(Some(t.pseudonym));
+                                report_done.set(false);
+                            },
+                            "Report"
+                        }
                     }
                 }
             }
         }
 
+
+        if let Some(subject) = reporting() {
+            div { class: "sheet-backdrop", onclick: move |_| reporting.set(None),
+                div { class: "sheet", onclick: move |e| e.stop_propagation(),
+                    if report_done() {
+                        h2 { "Reported" }
+                        p { class: "hint",
+                            "Your report is signed and published to the baseline feed. "
+                            "It is pseudonymous, not anonymous: someone reading the feed "
+                            "can see that the same temporary identity filed it, and that "
+                            "identity is the one on your tile this epoch. Blocking them "
+                            "is immediate and private, and is the thing that actually "
+                            "stops you seeing them."
+                        }
+                        div { class: "actions",
+                            button {
+                                class: "danger",
+                                onclick: move |_| {
+                                    blocked.write().push(subject);
+                                    reporting.set(None);
+                                    selected.set(None);
+                                },
+                                "Block them too"
+                            }
+                            button { class: "linkish", onclick: move |_| reporting.set(None),
+                                "Done" }
+                        }
+                    } else {
+                        h2 { "Report" }
+                        p { class: "hint",
+                            "There is no company here to appeal to. A report is a signed "
+                            "statement in a feed that other people choose to trust — it "
+                            "does not remove anyone, and nothing but blocking will stop "
+                            "them reaching you."
+                        }
+                        for reason in lkng_moderation::Reason::ORDER {
+                            button {
+                                key: "{reason.code()}",
+                                class: "menu-item",
+                                onclick: {
+                                    let node = node.clone();
+                                    let cov = cov.clone();
+                                    move |_| {
+                                        let _ = send_report(
+                                            &node, &me(), cov.epochs[0], subject, reason, "",
+                                        );
+                                        report_done.set(true);
+                                    }
+                                },
+                                "{reason.label()}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         nav { class: "tabs",
             for t in Tab::BAR {

@@ -11,6 +11,7 @@ lkng-app = { path = "../rust/lkng-app" }
 lkng-identity = { path = "../rust/lkng-identity" }
 lkng-presence = { path = "../rust/lkng-presence" }
 lkng-inbox = { path = "../rust/lkng-inbox" }
+lkng-moderation = { path = "../rust/lkng-moderation" }
 blake3 = "1"
 ciborium = "0.2"
 serde = { version = "1", features = ["derive"] }

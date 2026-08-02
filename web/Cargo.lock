@@ -2179,6 +2179,7 @@ dependencies = [
  "ciborium",
  "hkdf",
  "lkng-inbox",
+ "lkng-moderation",
  "lkng-presence",
  "lkng-profile",
  "ml-dsa",
@@ -2211,6 +2212,19 @@ dependencies = [
  "geohash",
  "hkdf",
  "sha2",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "lkng-moderation"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ciborium",
+ "freenet-scaffold",
+ "ml-dsa",
+ "serde",
+ "serde_bytes",
  "thiserror 2.0.19",
 ]
 
@@ -2267,6 +2281,7 @@ dependencies = [
  "lkng-identity",
  "lkng-inbox",
  "lkng-location",
+ "lkng-moderation",
  "lkng-presence",
  "serde",
  "serde_json",

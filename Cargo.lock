@@ -960,6 +960,7 @@ dependencies = [
  "ciborium",
  "hkdf",
  "lkng-inbox",
+ "lkng-moderation",
  "lkng-presence",
  "lkng-profile",
  "ml-dsa",
@@ -995,6 +996,20 @@ dependencies = [
  "hkdf",
  "proptest",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "lkng-moderation"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ciborium",
+ "freenet-scaffold",
+ "ml-dsa",
+ "proptest",
+ "serde",
+ "serde_bytes",
  "thiserror",
 ]
 

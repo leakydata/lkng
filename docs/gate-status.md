@@ -1449,3 +1449,44 @@ cannot be rotated for an existing listing.
 Release builds without it are produced **unsigned** rather than falling back
 to the debug key. A debug-signed release APK installs and looks fine, which
 is exactly how one ends up distributed.
+
+## 2026-08-01 — reporting, shaped as Atlas descriptors
+
+`lkng-moderation` plus `contracts/moderation`. A report is a signed claim by
+one party about a subject; a feed is a contract that accumulates them; a
+client subscribes to the feeds it trusts. There is no authority, because
+there cannot be one — no server to enforce a ban, no account to suspend, no
+way to make a peer drop data it wants to keep. Building a "remove this
+person" button would have been building a feature that silently does
+nothing.
+
+Design points that are load-bearing rather than incidental:
+
+- **Reports are counted by reporter, not by report.** `reporter_count`
+  deduplicates on the signing key. Counting reports is how one determined
+  person manufactures the appearance of consensus against someone.
+- **The feed name is inside the signed payload.** Without it, reports could
+  be harvested from a permissive feed and replayed into a strict one.
+- **Signed with the epoch key, never the durable one.** A report carries its
+  verifying key in public; the durable key would tie every report a person
+  ever files to one permanent identity and, through it, to their profile
+  address. `Identity::sign_report` takes `&self` deliberately so the caller
+  must pass `for_epoch(e)` — there is no correct epoch to derive, since feed
+  parameters carry none, and guessing would be worse than asking.
+- **Cap applied post-merge, never in validation**, and truncation ordered
+  totally by `(timestamp, id)` — the same discipline as the presence cell,
+  for the same convergence reason.
+- **The contract verifies reports on the way in** and drops bad ones rather
+  than failing the update. One unverifiable record reaching state would make
+  the next `validate_state` reject the whole feed, turning a single bad
+  report into a feed nobody can write to.
+
+**What the UI says, and why it says it.** The report sheet states that there
+is no company to appeal to, that a report removes nobody, and that blocking
+is the only thing that actually stops someone reaching you. After filing, it
+says the report is *pseudonymous, not anonymous*: the epoch key that signed
+it is the same one on the reporter's tile, so someone watching both can tell
+which tile filed it. That matters most in exactly the case reporting matters
+most — a small cell, a dangerous person. Harvest's blind-signed tokens are
+the real fix and are not built; until they are, the honest move is to say so
+where the user can read it, not only in a doc.

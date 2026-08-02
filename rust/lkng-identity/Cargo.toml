@@ -10,6 +10,7 @@ repository.workspace = true
 lkng-inbox = { path = "../lkng-inbox" }
 lkng-presence = { path = "../lkng-presence" }
 lkng-profile = { path = "../lkng-profile" }
+lkng-moderation = { path = "../lkng-moderation" }
 argon2 = "0.5"
 blake3 = "1"
 bs58 = "0.5"
