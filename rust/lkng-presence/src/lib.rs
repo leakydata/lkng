@@ -503,6 +503,7 @@ mod tests {
             age_band: 3,
             position: 0,
             verifying_key: None,
+            encryption_key: None,
             writer_cert: None,
             sig: vec![seed; 64],
         }

@@ -39,6 +39,7 @@ fn tile(id: &Identity, params: &CellParams, headline: &str, ts: u64) -> Presence
         position: 0,
         age_band: 0,
         verifying_key: None,
+        encryption_key: None,
         writer_cert: None,
         sig: vec![],
     };
