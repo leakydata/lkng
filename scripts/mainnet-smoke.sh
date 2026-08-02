@@ -60,25 +60,39 @@ PY
 
 PASS=0
 FAIL=0
+TIMEOUT=0
 FAILED=()
+TIMEDOUT=()
 
 run() {
-  local name="$1"; shift
+  local name="$1" out rc; shift
   echo
   echo "==> $name"
-  # Two attempts: mainnet PUTs time out under transient peer churn, and a
-  # retry is honest here in a way it would not be for a logic test. A path
-  # that fails twice is reported as failing.
-  for attempt in 1 2; do
-    if timeout 560 cargo run -q --example "$name" -p lkng-transport-freenet -- "$@" 2>&1 \
-        | sed 's/^/    /'; then
+  # Three attempts. Mainnet PUTs time out under peer churn and under load on
+  # a node that has been up for hours; observed failing twice in a row and
+  # then passing alone, so two was not enough.
+  for attempt in 1 2 3; do
+    out=$(timeout 560 cargo run -q --example "$name" -p lkng-transport-freenet -- "$@" 2>&1)
+    rc=$?
+    echo "$out" | sed 's/^/    /'
+    if [ "$rc" = 0 ]; then
       PASS=$((PASS + 1))
       return 0
     fi
-    [ "$attempt" = 1 ] && echo "    (retrying once — mainnet writes time out under churn)"
+    [ "$attempt" -lt 3 ] && echo "    (retry $attempt)"
   done
-  FAIL=$((FAIL + 1))
-  FAILED+=("$name")
+
+  # Classify. A timeout is the network refusing to carry a write; an
+  # assertion or verification failure is the code being wrong. Reporting
+  # both with the same alarming sentence trains people to ignore it, which
+  # costs exactly when it is the second kind.
+  if echo "$out" | grep -qiE 'timed out|Timeout|session reader has stopped'; then
+    TIMEOUT=$((TIMEOUT + 1))
+    TIMEDOUT+=("$name")
+  else
+    FAIL=$((FAIL + 1))
+    FAILED+=("$name")
+  fi
 }
 
 run two_apps         "$(W presence-cell presence_cell.wasm)" "$PARAMS"
@@ -91,14 +105,26 @@ rm -f "$PARAMS"
 
 echo
 echo "-------------------------------------------"
-echo "$PASS passed, $FAIL failed"
+echo "$PASS passed, $FAIL failed, $TIMEOUT timed out"
+
+if [ "$TIMEOUT" -gt 0 ]; then
+  printf 'timed out: %s\n' "${TIMEDOUT[*]}"
+  echo
+  echo "A timeout is the network declining to carry a write, not evidence the"
+  echo "path is broken. It happens under peer churn and on a node that has been"
+  echo "up for hours. Re-run the named example alone before concluding anything;"
+  echo "if it passes there, the path is fine and the node is tired."
+fi
+
 if [ "$FAIL" -gt 0 ]; then
   printf 'failed: %s\n' "${FAILED[*]}"
   echo
-  echo "A failure here is a broken write path, not a flaky test — every one of"
-  echo "these was added after the path it covers shipped broken."
+  echo "This is an assertion or verification failure, which IS a broken write"
+  echo "path — every example here was added after the path it covers shipped"
+  echo "broken, and none of them fail this way for environmental reasons."
   exit 1
 fi
+[ "$TIMEOUT" -gt 0 ] && exit 2
 echo
 echo "All mainnet write paths verified. This says nothing about the app on a"
 echo "phone: UI, WebView, node lifecycle and battery are all outside it."

@@ -2038,3 +2038,31 @@ wrong (the summarize cost, the subscription count, a phone-specific defect).
 Each was disproved in minutes by measuring instead of arguing. The pattern
 of the whole session holds — reading and reasoning produced confident wrong
 answers, and running something produced the right one every time.
+
+## 2026-08-02 — the smoke suite cried wolf, and a tired node
+
+A full regression run gave 4/5, with `album_share` failing twice on
+`put timed out`. Run alone immediately afterwards, it passed completely.
+
+So the script's failure message — *"A failure here is a broken write path,
+not a flaky test"* — was wrong, and wrong in the way that matters: a warning
+which fires on environmental noise is one people learn to skip, and the cost
+lands precisely when it is the real kind.
+
+Now it classifies. A timeout is the network declining to carry a write and
+is reported as such, with the instruction to re-run the example alone before
+concluding anything. An assertion or verification failure keeps the strong
+wording and exits non-zero, because none of these examples fail that way for
+environmental reasons. Three attempts rather than two, since two was
+demonstrably not enough.
+
+**And the node is tired.** The desktop node after ~5 hours: **1 220 MB RSS,
+27% of a core, 14 client WebSocket connections** left by `fdev` invocations
+that never closed. That is almost certainly why writes started timing out —
+it is the same self-inflicted congestion fixed earlier with `Demux::close()`,
+arriving this time through tooling rather than our own examples.
+
+Not a user-facing problem: a real install has one client and does not run
+`fdev` fifteen times an evening. But it is a real hazard for anyone
+*developing* on Freenet, and worth knowing before spending an hour
+diagnosing "the network" when the answer is a leaked socket.
