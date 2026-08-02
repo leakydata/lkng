@@ -2101,3 +2101,38 @@ implying contract count is the whole story.
 Practical upshot for LKNG in the meantime: **the node benefits from being
 restarted**. The duty cycle already stops and starts it on charge and network
 transitions, which turns out to be worth more than it was designed for.
+
+## 2026-08-02 — the uptime curve, and a second wrong attribution
+
+Same node, same data directory, sampled at increasing uptime:
+
+```text
+ 2 min:   7.1% of one core, 1040 MB
+34 min:  12.6% of one core, 1218 MB
+ 5 h:    27.4% of one core, 1192 MB
+```
+
+CPU roughly quadruples over five hours on an unchanged contract set. RSS is
+broadly flat, so it is not memory pressure. This is now three points on a
+curve rather than two points hours apart, which is what the upstream report
+needed.
+
+**Second correction of the night.** I attributed the node's 14 open client
+connections to "leaked `fdev` invocations". After a clean restart with no
+`fdev` runs at all, there are still 7 — and their remote ends have **no
+owning process**. They are dead sockets the node is not reaping, not
+anything our tooling left behind.
+
+That connects to something already seen: earlier in development this node
+reached `LISTEN 129 128`, an exhausted accept backlog, and refused new client
+connections — which presented as "the network is down". We fixed our side
+then (`Demux::close()`); the accumulation continues without us.
+
+On a phone the consequence is specific and bad: a long-lived node that stops
+accepting clients is an app that has silently lost its own node, with a
+running foreground service insisting everything is fine.
+
+Both corrections tonight came from the same habit — I explained a number
+with the most available story rather than checking it. "fdev leaked these"
+was plausible, matched the timeline, and was wrong. One command to the
+process table settled it.

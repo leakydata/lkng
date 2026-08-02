@@ -78,9 +78,14 @@ also samples the long-running node that hosts many contracts:
 
 ```text
 empty data dir, 0 contracts, 0 clients:   0.4% of one core,   42 MB
-same contracts, 2 min after restart:      7.1% of one core, 1040 MB
-same contracts, 5 h uptime:              27.4% of one core, 1192 MB
+same contracts,  2 min uptime:            7.1% of one core, 1040 MB
+same contracts, 34 min uptime:           12.6% of one core, 1218 MB
+same contracts,  5 h  uptime:            27.4% of one core, 1192 MB
 ```
+
+The three loaded readings are the **same node with the same data directory**,
+sampled at increasing uptime, with no meaningful change to the contract set
+between them.
 
 Two things, not one:
 
@@ -117,10 +122,20 @@ can live on a phone, and the phone is where the constraint bites. But a
 maintainer should know that this looks like *the node's normal idle cost
 measured on weaker hardware*, not a mobile-only defect.
 
-The desktop figures are otherwise not representative of a user: that node
-carries 1.2 GB RSS and 7 leaked client WebSocket connections after an
-evening of development, which is a dev artefact rather than something a
-user's node would accumulate.
+## Client connections are not reaped
+
+Related, and possibly the same underlying accumulation: 34 minutes after a
+clean restart the node holds **7 established connections on its client API
+port whose remote peers have no owning process**. Nothing was connected —
+no `fdev`, no app, no examples running.
+
+We first noticed this as `LISTEN 129 128` earlier in development: the node
+had exhausted its accept backlog and was refusing new client connections,
+which presented as the network being down. We fixed our side (examples now
+close their sessions explicitly), and connections still accumulate.
+
+If dead client sockets are never reaped, a long-lived node eventually stops
+accepting clients — on a phone, that is the app silently losing its own node.
 
 ## Questions
 
