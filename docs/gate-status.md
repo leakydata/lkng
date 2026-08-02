@@ -1403,3 +1403,49 @@ mattered. Neither was visible from the source. Both took about ninety
 seconds to find once something actually ran the path end to end.
 
 Reading is not verification. An example that exercises the real path is.
+
+## 2026-08-01 — the Android build had not compiled Kotlin in some time
+
+Setting up release signing surfaced this: Kotlin 2.0.21's compiler parses
+the JVM version string with a routine that rejects a bare major version of
+25, throwing `IllegalArgumentException: 25.0.3` before compiling anything.
+The machine's default JDK is 25.
+
+**The part worth recording is how it stayed hidden.** Because every output
+was already up to date, `gradle assembleDebug` reported BUILD SUCCESSFUL and
+produced an APK — the previous one, unchanged. Earlier tonight that APK was
+built, installed on the device, and reported as "the latest build". It was
+not; it was whatever had last compiled successfully under a JDK that worked.
+
+`org.gradle.java.home` now pins JDK 21, and a clean build confirms
+`compileDebugKotlin` actually runs rather than being skipped.
+
+**Three times in one day**, on three unrelated toolchains:
+
+| Tool | Reported | Actually did |
+| --- | --- | --- |
+| `dx bundle --release` | success | re-emitted a previous wasm |
+| `gradle assembleDebug` | success | skipped Kotlin, kept the old APK |
+| `publish_presence` | "You're visible" | sent a delta the contract rejected |
+
+Not one was a logic error, and not one was visible by reading the code.
+Each was found only by checking the *artifact* against something independent
+— a marker string in the wasm, a task list in the build log, a record fetched
+back off the network.
+
+The rule this session earned: **a build or a write that reports success has
+told you about itself, not about its output.** Verify the output.
+
+## Release signing
+
+`android/app/build.gradle.kts` reads `android/keystore.properties`, which is
+git-ignored and does not exist in this repository. No release key has been
+generated — that key is the entire update-trust model for an app in this
+category, since whoever holds it can ship an update every existing install
+accepts silently. It should be created and held by the project owner, on a
+machine of their choosing, and backed up offline; Android app signing keys
+cannot be rotated for an existing listing.
+
+Release builds without it are produced **unsigned** rather than falling back
+to the debug key. A debug-signed release APK installs and looks fine, which
+is exactly how one ends up distributed.
