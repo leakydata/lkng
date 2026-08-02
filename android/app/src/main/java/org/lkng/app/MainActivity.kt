@@ -1,7 +1,10 @@
 package org.lkng.app
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -17,6 +20,40 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
+
+    /** The chooser callback currently awaiting a result, if any. */
+    private var pendingFile: ValueCallback<Array<Uri>>? = null
+
+    /**
+     * Result launcher for the system file picker.
+     *
+     * Registered as a field so it is created during `onCreate`, which the
+     * Activity Result API requires — registering it lazily from inside the
+     * chooser callback throws at runtime, and only when a user first taps
+     * "add a photo".
+     */
+    private val filePicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val cb = pendingFile
+        pendingFile = null
+        if (cb == null) return@registerForActivityResult
+
+        // Cancelling must still answer the callback, with null. Returning
+        // nothing at all is what wedges the input permanently.
+        val uris: Array<Uri>? = if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            val clip = data?.clipData
+            when {
+                clip != null -> Array(clip.itemCount) { i -> clip.getItemAt(i).uri }
+                data?.data != null -> arrayOf(data.data!!)
+                else -> null
+            }
+        } else {
+            null
+        }
+        cb.onReceiveValue(uris)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,6 +96,54 @@ class MainActivity : AppCompatActivity() {
             // which pins navigation to the node's loopback origin.
             addJavascriptInterface(KeyVault(this@MainActivity), "LkngVault")
             addJavascriptInterface(Locator(this@MainActivity), "LkngLocation")
+
+            // Without this, `<input type="file">` does **nothing**. No
+            // picker, no error, no console message — the tap is simply
+            // swallowed, and every photo feature in the app is unreachable
+            // on Android while working perfectly in a desktop browser.
+            //
+            // That is exactly what shipped: profile photos, multiple photos,
+            // album photos and backup restore were all built, tested and
+            // published, and none of them could be triggered on a phone.
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    view: WebView?,
+                    callback: ValueCallback<Array<Uri>>?,
+                    params: FileChooserParams?,
+                ): Boolean {
+                    // Any previous request must be answered before a new one
+                    // starts. A ValueCallback left un-called leaves the
+                    // WebView believing a chooser is still open, and every
+                    // later tap on a file input is ignored for the life of
+                    // the page — the failure looks identical to having no
+                    // chooser at all, which makes it hard to tell apart from
+                    // the bug this whole block fixes.
+                    pendingFile?.onReceiveValue(null)
+                    pendingFile = callback
+
+                    return try {
+                        val intent = params?.createIntent()
+                            ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                                type = "image/*"
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                            }
+                        // ACTION_GET_CONTENT via the system picker: it grants
+                        // read access to exactly the file chosen and nothing
+                        // else, so the app never needs a storage permission.
+                        // Asking for READ_MEDIA_IMAGES to upload one photo
+                        // would be requesting the whole gallery to read one
+                        // file, from an app whose argument is that it takes
+                        // only what it needs.
+                        filePicker.launch(intent)
+                        true
+                    } catch (e: Exception) {
+                        android.util.Log.e("lkng.ui", "no file picker available", e)
+                        pendingFile?.onReceiveValue(null)
+                        pendingFile = null
+                        false
+                    }
+                }
+            }
 
             webViewClient = object : WebViewClient() {
 

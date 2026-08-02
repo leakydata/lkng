@@ -2425,3 +2425,42 @@ does not get to start at the delete button.
 
 Two taps rather than a confirm dialog, because it is the only irreversible
 control in the app and it lives in a list people scroll.
+
+## 2026-08-02 — photos never worked on the phone at all
+
+The user, three times over two days: *"I still can't add photos."*
+
+**`WebChromeClient.onShowFileChooser` was never implemented.** Without it an
+Android WebView swallows `<input type="file">` entirely — no picker, no
+error, no console message. The tap does nothing.
+
+So every photo feature was unreachable on the device: the profile photo, the
+multi-photo gallery, the primary selection, album photos, and the backup
+restore file input. All of them built, unit-tested, published, verified on
+mainnet — and impossible to trigger on a phone. They worked perfectly in a
+desktop browser, which is where I kept checking.
+
+This is the sharpest version of the session's lesson. Every piece of evidence
+I gathered was real: the tests passed, the contracts round-tripped on
+mainnet, `to_thumbnail` genuinely strips EXIF, the primary flag genuinely
+survives a signature. **None of it touched the one path a user takes.** I
+verified the parts I had built and never the thing the user does, and the
+user told me three times.
+
+Two details in the fix that are failure modes of their own:
+
+- **A `ValueCallback` left un-called wedges the input permanently.** The
+  WebView believes a chooser is still open and ignores every later tap for
+  the life of the page — indistinguishable from having no chooser at all.
+  So cancellation answers with `null`, and a new request answers any stale
+  one before replacing it.
+- **The launcher is registered as a field**, not lazily inside the callback.
+  The Activity Result API requires registration before the activity starts;
+  doing it on first use throws — and only when a user first taps "add a
+  photo", which is precisely the moment this bug already ruined once.
+
+No storage permission is requested. `ACTION_GET_CONTENT` through the system
+picker grants read access to the single chosen file. Asking for
+`READ_MEDIA_IMAGES` to upload one photo would mean requesting the entire
+gallery to read one file, from an app whose argument is that it takes only
+what it needs.
