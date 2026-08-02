@@ -2267,6 +2267,7 @@ dependencies = [
  "lkng-location",
  "lkng-presence",
  "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -308,6 +308,48 @@ fn live_tiles(session: &Session, cov: &Coverage, node: &Node) -> (Vec<Tile>, usi
     (grid.tiles(), grid.rejected)
 }
 
+/// What the user has entered about themselves.
+///
+/// Held locally and published on save. Kept as a plain struct rather than
+/// a `ProfileBody` so the editor can hold half-finished input without
+/// anything half-finished ever being signable.
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Draft {
+    display_name: String,
+    headline: String,
+    bio: String,
+    age: String,
+    position: u8,
+    gender: String,
+    hiv_status: String,
+    thumbnail: Vec<u8>,
+}
+
+const DRAFT_KEY: &str = "lkng.profile.draft.v1";
+
+fn load_draft() -> Draft {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(DRAFT_KEY).ok().flatten())
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
+fn save_draft(d: &Draft) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(j) = serde_json::to_string(d) {
+            let _ = s.set_item(DRAFT_KEY, &j);
+        }
+    }
+}
+
+/// Which screen is showing.
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Browse,
+    Profile,
+}
+
 #[component]
 fn App() -> Element {
     let session = use_hook(me);
@@ -358,6 +400,8 @@ fn App() -> Element {
     let live = !found.is_empty();
     let tiles = if live { found } else { demo_tiles(&session, &cov) };
 
+    let mut tab = use_signal(|| Tab::Browse);
+    let mut draft = use_signal(load_draft);
     let mut blocked = use_signal(Vec::<[u8; 32]>::new);
     let mut selected = use_signal(|| None::<Tile>);
     let visible: Vec<Tile> = tiles
@@ -410,7 +454,11 @@ fn App() -> Element {
             }
         }
 
-        main {
+        if tab() == Tab::Profile {
+            ProfileEditor { draft: draft, onclose: move |_| tab.set(Tab::Browse) }
+        }
+
+        main { class: if tab() == Tab::Profile { "hidden" } else { "" },
             p { class: "note", "{note}" }
 
             div { class: "grid",
@@ -460,6 +508,19 @@ fn App() -> Element {
                         }
                     }
                 }
+            }
+        }
+
+        nav { class: "tabs",
+            button {
+                class: if tab() == Tab::Browse { "tab on" } else { "tab" },
+                onclick: move |_| tab.set(Tab::Browse),
+                "Browse"
+            }
+            button {
+                class: if tab() == Tab::Profile { "tab on" } else { "tab" },
+                onclick: move |_| tab.set(Tab::Profile),
+                "Profile"
             }
         }
 
