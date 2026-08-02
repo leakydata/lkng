@@ -444,3 +444,11 @@ button.wide { width: 100%; padding: 13px; border-radius: 12px; margin-bottom: 12
   background: #1b1d24; border: 1px solid var(--line);
   border-radius: 10px; color: inherit; font: inherit;
 }
+
+.banner {
+  margin: 10px 16px; padding: 12px 14px; border-radius: 12px;
+  background: #1b1d24; border: 1px solid var(--accent);
+  font-size: 13px; line-height: 1.45;
+}
+.banner b { font-size: 14px; }
+.banner .row { margin-top: 10px; }

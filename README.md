@@ -151,9 +151,9 @@ the product is not".
 
 **Do not use this as a dating app yet.** The specific gaps that matter:
 
-- losing the phone loses the account **unless a backup file was saved**, and
-  nothing prompts for one during setup yet — it is a settings screen a user
-  has to find;
+- losing the phone loses the account unless a backup file was saved; the app
+  prompts once you have something to lose, but a prompt is not a guarantee
+  anyone acted on it;
 - nobody has measured what the node does to a battery over a day;
 - a public photo grid is scrapeable and face matching defeats pseudonym
   rotation, which is true of every app in this category and is stated in

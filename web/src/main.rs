@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b37017";
+pub const BUILD_MARKER: &str = "b37214";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -850,6 +850,8 @@ fn App() -> Element {
     let mut shared = use_signal(|| false);
     let mut reporting = use_signal(|| None::<[u8; 32]>);
     let mut album_msg = use_signal(|| None::<String>);
+    let mut dismissed = use_signal(dismissed_backup);
+    let _ = dismissed();
 
     // Our own album, as the node currently holds it.
     let my_album: lkng_album::AlbumState = {
@@ -1538,6 +1540,35 @@ fn App() -> Element {
         // An app that publishes you to a public cell owes you a plain
         // statement of whether it has done so; "trust us" is the thing this
         // whole project exists to refuse.
+        // Prompted once the account is worth something -- a headline written,
+        // or a message received. Nagging someone on a blank first run, before
+        // they have decided to stay, teaches them to dismiss the one banner
+        // that actually matters.
+        if tab() == Tab::Browse && !backup_saved() && !dismissed_backup()
+            && (!draft.read().headline.trim().is_empty() || !threads.is_empty())
+        {
+            div { class: "banner",
+                div {
+                    b { "Back up your account" }
+                    br {}
+                    "There is no password reset here. If you lose this phone "
+                    "without a backup file, this account is gone for good."
+                }
+                div { class: "row",
+                    button {
+                        class: "primary",
+                        onclick: move |_| { tab.set(Tab::Settings); },
+                        "Save a backup"
+                    }
+                    button {
+                        class: "secondary",
+                        onclick: move |_| { dismiss_backup(); dismissed.set(true); },
+                        "Not now"
+                    }
+                }
+            }
+        }
+
         if tab() == Tab::Browse {
             div {
                 class: if visible_to_others { "visnote on" } else { "visnote" },
@@ -1731,6 +1762,43 @@ fn share_album(
     Ok(())
 }
 
+
+/// Storage key recording that a backup file has been saved.
+const BACKED_UP_KEY: &str = "lkng.backup.saved.v1";
+
+/// Whether the user has waved the backup prompt away this install.
+///
+/// Remembered, not re-asked every launch. A prompt that returns after being
+/// dismissed is one people learn to dismiss without reading, which is
+/// exactly the wrong reflex to build for this particular warning.
+fn dismissed_backup() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("lkng.backup.dismissed.v1").ok().flatten())
+        .is_some()
+}
+
+fn dismiss_backup() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item("lkng.backup.dismissed.v1", "1");
+    }
+}
+
+fn backup_saved() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(BACKED_UP_KEY).ok().flatten())
+        .is_some()
+}
+
+fn mark_backup_saved() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        // Records only *that* a backup was made, never when or where it went.
+        // A timestamp would let anyone with the device infer when the user
+        // last had access to wherever they keep it.
+        let _ = s.set_item(BACKED_UP_KEY, "1");
+    }
+}
 
 /// Write a restored identity and its app data back into device storage.
 ///
@@ -2348,10 +2416,10 @@ fn SettingsPanel(onclose: EventHandler<()>) -> Element {
                                         offer_download(&b, "lkng-account-backup.bin").map(|_| n)
                                     })
                                 {
-                                    Ok(n) => backup_msg.set(Some(format!(
+                                    Ok(n) => { mark_backup_saved(); backup_msg.set(Some(format!(
                                         "Saved {n} bytes. Without this passphrase the \
                                          file cannot be opened by anyone, including us."
-                                    ))),
+                                    ))) },
                                     Err(e) => backup_msg.set(Some(e)),
                                 }
                             },
