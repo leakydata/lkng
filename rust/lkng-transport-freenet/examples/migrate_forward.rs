@@ -32,7 +32,7 @@
 use std::time::Duration;
 
 use freenet_stdlib::client_api::{ClientRequest, ContractRequest, WebApi};
-use freenet_stdlib::prelude::{RelatedContracts, StateDelta, UpdateData, WrappedState};
+use freenet_stdlib::prelude::{RelatedContracts, WrappedState};
 use lkng_identity::Identity;
 use lkng_inbox::{carry_forward, InboxParams, InboxState};
 use lkng_transport_freenet::demux::{Demux, Reply, ReplyKind};

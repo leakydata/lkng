@@ -1527,3 +1527,47 @@ thread would be a bug.
 A `data:` URL also means rendering the grid makes no third-party request,
 so a supplied photo cannot be turned into a beacon that reports who viewed
 whom.
+
+## 2026-08-01 — contract migration, and a doc comment the network refuted
+
+`contracts/legacy_contracts.toml` plus `scripts/snapshot-contract.sh`: a
+contract's address is `BLAKE3(BLAKE3(wasm) || params)`, so any change to
+compiled output — a struct field, a dependency bump — moves it. The old
+address keeps everyone's data, the new one starts empty, and nothing errors.
+The snapshot script copies the current wasm before such a change, because
+afterwards the old binary does not exist. The blobs are committed on purpose:
+a migration path requiring a months-old toolchain rebuilt to byte-identical
+output is not a migration path.
+
+Tonight's presence-cell rotation is recorded there as unrecoverable. It cost
+nothing real — presence cells are epoch-scoped and everything in them was
+hours from expiring — but the same oversight on `inbox` would have been
+every message anybody had received.
+
+**The part worth recording.** I wrote `carry_forward` with a doc comment
+asserting that envelopes are bound to the recipient's key rather than the
+contract address, so migrated state would republish cleanly. Three unit
+tests passed. The mainnet run rejected it in one round trip:
+
+```text
+UPDATE failed: inbox failed verification: signature verification failed
+```
+
+An envelope's signature covers the **inbox parameters**. Mail sealed to a
+retired address does not verify at a new one — and that is the binding which
+stops anyone lifting an envelope out of one person's inbox and replaying it
+into another's. It is a property to keep, not an obstacle.
+
+So migration is a **read**, not a move: fetch the retired address, decrypt
+what you can, keep the plaintext on the device — which is already where the
+user's sent messages live and already authoritative for history. The network
+delivers; the device archives. `carry_forward` is now `#[must_use]` with the
+warning in its own docs, and the property is pinned by a test in
+`lkng-identity` so nobody re-derives the wrong conclusion from the types.
+
+No unit test could have caught the original error: in-process, nothing checks
+the parameters. It needed a contract that does.
+
+This is now the fourth time today that something confidently correct on
+paper was wrong in fact, and the fourth time the difference cost one round
+trip to find.
