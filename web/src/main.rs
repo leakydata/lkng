@@ -500,6 +500,47 @@ fn App() -> Element {
     }
     let _ = generation();
 
+    // Publish our own presence, and keep it fresh.
+    //
+    // Re-published on a timer rather than once, for two reasons that both
+    // make someone silently disappear from the grid if missed: cells are
+    // capped at the newest N records, so a stale tile is eventually evicted
+    // by newer arrivals; and cells are per-epoch contracts, so at a rollover
+    // the tile has to be written into a *different* contract or the user
+    // vanishes from their own neighbourhood.
+    //
+    // The interval is minutes, not seconds. Every publish is bytes that
+    // every phone in the cell downloads, and the app's whole argument is
+    // that it does not treat other people's batteries as free.
+    {
+        let node = node.clone();
+        let cov = cov.clone();
+        use_future(move || {
+            let node = node.clone();
+            let cov = cov.clone();
+            async move {
+                loop {
+                    if *node.status.borrow() == Status::Connected {
+                        let session = me();
+                        let (cov_now, fix_now) = coverage_for(&session);
+                        // Recomputed rather than captured: the epoch turns
+                        // over while the app is open, and publishing into
+                        // last epoch's cell is the same as not publishing.
+                        let _ = publish_presence(
+                            &node,
+                            &session,
+                            &cov_now,
+                            &load_draft(),
+                            fix_now,
+                        );
+                    }
+                    let _ = &cov;
+                    gloo_timers::future::TimeoutFuture::new(4 * 60 * 1000).await;
+                }
+            }
+        });
+    }
+
     let status = node.status.borrow().clone();
     let (found, rejected) = live_tiles(&session, &cov, &node);
     let live = !found.is_empty();
@@ -925,6 +966,75 @@ fn App() -> Element {
             }
         }
     }
+}
+
+
+/// Publish our own tile into the home cell.
+///
+/// # Why this is gated, and gated hard
+///
+/// Publishing presence is the one thing this app does that is **irrevocably
+/// public**. A tile goes into a shared cell that anyone can subscribe to,
+/// and once bytes are on the network they cannot be recalled. So it happens
+/// only when every one of these is true:
+///
+/// * the user has actually filled in a headline — publishing an empty tile
+///   puts someone in a public grid before they have decided to be there;
+/// * we have a **real device fix**, not the sample area. Publishing against
+///   the fallback location would drop the user into a cell on the other side
+///   of the world, visible to strangers, having never left their house;
+/// * the node is connected, so the write has somewhere to go.
+///
+/// The second condition is the one that would be easy to get wrong and hard
+/// to notice, because in development the sample area *looks* like it works.
+///
+/// # What is deliberately not published
+///
+/// [`TileFilters::from_profile`] drops the health fields on the way in, so
+/// HIV status cannot reach a tile even if a future editor adds it to the
+/// draft. That is enforced by a test in `lkng-app`, not by this comment.
+fn publish_presence(
+    node: &Node,
+    session: &Session,
+    cov: &Coverage,
+    draft: &Draft,
+    fix: Fix,
+) -> Result<(), String> {
+    if fix != Fix::Device {
+        return Err("no device location yet".into());
+    }
+    if draft.headline.trim().is_empty() {
+        return Err("no headline yet".into());
+    }
+
+    let params = cov.publish_target();
+    let filters = lkng_app::TileFilters {
+        age_band: draft.age.parse::<u8>().ok().map(|a| a / 10).unwrap_or(0),
+        position: draft.position,
+    };
+    let rec = session
+        .compose_tile_with(
+            &params,
+            draft.headline.trim(),
+            draft.thumbnail.clone(),
+            now_unix() * 1000,
+            filters,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(CELL_WASM, &params_bytes);
+
+    // Seed with a state containing our record, then send it again as a
+    // delta. The seed handles the case where nobody near us hosts this cell
+    // yet; the delta handles the case where the cell already exists and a
+    // PUT would be ignored. Both are cheap, and the cell state is a
+    // commutative merge, so doing both is safe rather than wasteful.
+    let mut state = CellState::default();
+    state.insert(rec.clone());
+    node.seed(CELL_WASM, &params_bytes, cbor(&state));
+    node.update(key, cbor(&state));
+    Ok(())
 }
 
 /// Seal a message to a tile and write it into the recipient's inbox.
