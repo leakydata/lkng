@@ -1,3 +1,8 @@
+// Top-level import: inside the `android { }` block, `java` resolves to
+// Gradle's own `java` extension and shadows the package, so
+// `java.util.Properties` fails to resolve there.
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -42,7 +47,7 @@ android {
     // it means every existing install is stranded on its last version, with
     // no way to publish a security fix to them.
     val keystorePropsFile = rootProject.file("keystore.properties")
-    val keystoreProps = java.util.Properties().apply {
+    val keystoreProps = Properties().apply {
         if (keystorePropsFile.exists()) {
             keystorePropsFile.inputStream().use { load(it) }
         }
