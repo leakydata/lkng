@@ -23,9 +23,25 @@ lkng.node: node started, contributing=true
 
 A Samsung Galaxy Z Flip 4 on **Android 16**, running **unmodified**
 `freenet-core` as a child process of an ordinary app: 16 distinct peer
-addresses, `joined peer` / `connected peers`, node RSS **31 MB**. It
-relays for other peers — the log shows it processing `SUBSCRIBE relay`
-requests on behalf of strangers. It is a real peer, not a thin client.
+addresses, `joined peer` / `connected peers`. It relays for other peers —
+the log shows it processing `SUBSCRIBE relay` requests on behalf of
+strangers. It is a real peer, not a thin client.
+
+**Memory is the honest problem.** An earlier version of this file said
+"RSS 31 MB", measured minutes after a cold start. After a long run hosting
+real contracts, `/proc/<pid>/status` reports:
+
+```text
+VmRSS:   324764 kB     (317 MB resident)
+VmHWM:   459460 kB     (449 MB peak)
+```
+
+That is roughly 4% of this device's 7.4 GB, which it survives comfortably.
+On a 4 GB phone it would be a different conversation, and Android's
+low-memory killer would eventually win. **A node on a phone is not free, and
+the number that matters is the one after hours of hosting, not the one after
+the splash screen.** Anyone evaluating mobile Freenet should measure their
+own; the 31 MB figure was true and misleading at the same time.
 
 ### How it is done
 

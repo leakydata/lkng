@@ -1763,3 +1763,33 @@ That is the self-update claim demonstrated rather than asserted: a UI change
 reaches a locked phone over Freenet, with no store review and no server.
 It is one device on one network and should be read as such, but it is a
 measurement rather than a hope.
+
+## 2026-08-01 — node memory is 10x what the README claimed
+
+Starting the long-run watcher immediately produced a correction. The README
+had said "node RSS 31 MB" since the first device test. `/proc/<pid>/status`
+after a long run hosting real contracts:
+
+```text
+VmRSS:   324764 kB     (317 MB resident)
+VmHWM:   459460 kB     (449 MB peak)
+```
+
+The 31 MB figure was measured minutes after a cold start, before the node
+hosted anything. It was true when written and became misleading without
+anyone touching it — the worst kind of wrong number, because nothing ever
+prompts a re-check.
+
+On this device (7.4 GB, 2.9 GB free) 317 MB is about 4% and survivable. On
+a 4 GB phone Android's low-memory killer would eventually take it. That is
+a real constraint on "a Freenet node on your phone", and the README now says
+so with both numbers rather than the flattering one.
+
+**Battery drain remains unmeasured, and could not be measured tonight**: the
+phone is USB-powered because adb needs the cable, so every sample reads
+`plugged: 1`. Measuring drain needs a run with no cable, which means no adb,
+which means the phone has to log it itself or the user has to read it off
+afterwards. Recorded as still-open rather than quietly skipped —
+`scripts/battery-watch.sh` is sampling CPU, RSS and Doze survival, which the
+cable does not affect, and charging is full-contribution mode so it is the
+interesting worst case for CPU.
