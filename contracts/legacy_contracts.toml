@@ -75,3 +75,21 @@ version = 1
 retired = ""
 reason = "current"
 wasm = ""
+
+[[contract]]
+name = "profile"
+version = 1
+retired = "2026-08-02"
+reason = """
+Profile photos gained inline storage. `PhotoRef` already carried
+`is_primary` but only a hash, pointing at bytes that were never stored
+anywhere -- so a profile could name a primary photo it had no way to show.
+`ProfileBody` now carries the image bytes and a primary index.
+
+At risk in the old address: display name, bio, tags, demographics and the
+16 KiB thumbnail of anyone who published a profile before this. Recoverable
+by reading the old address, since a profile is signed by its owner's durable
+key and the client can still verify it there.
+"""
+wasm = "legacy/profile-1.wasm"
+hash = "c0bca7476f6006fabebab49d8f645ae4864af9c4d27765255758457350327e2b"

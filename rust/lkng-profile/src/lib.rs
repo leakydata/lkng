@@ -41,6 +41,21 @@ pub const MAX_TAG_BYTES: usize = 24;
 /// Photo references are content hashes, not inline bytes — full-size media
 /// lives in its own contracts (chunked when large).
 pub const MAX_PHOTOS: usize = 8;
+
+/// Cap on one stored profile photo.
+///
+/// Larger than a grid thumbnail (16 KiB) because a profile photo is fetched
+/// deliberately by someone who chose to look, not pushed to everyone in a
+/// cell. Small enough that eight of them stay inside the low-single-MB
+/// practical ceiling for one contract's state.
+pub const MAX_PHOTO_BYTES: usize = 96 * 1024;
+
+/// Cap on all photos together.
+///
+/// Enforced in addition to the per-photo cap, because eight photos each just
+/// under the limit is 768 KiB before anything else in the profile — and the
+/// number that matters to a peer replicating this contract is the total.
+pub const MAX_PHOTOS_TOTAL_BYTES: usize = 512 * 1024;
 pub const MAX_THUMBNAIL_BYTES: usize = 16 * 1024;
 pub const MAX_SIG_BYTES: usize = 4096;
 pub const ML_DSA_65_VK_BYTES: usize = 1952;
@@ -105,6 +120,12 @@ pub enum ProfileError {
     BioTooLong,
     #[error("too many tags (max {MAX_TAGS}) or a tag exceeds {MAX_TAG_BYTES} bytes")]
     BadTags,
+    #[error("a profile with photos needs exactly one primary, found {0}")]
+    PrimaryPhoto(usize),
+    #[error("a photo exceeds {MAX_PHOTO_BYTES} bytes")]
+    PhotoTooLarge,
+    #[error("photos total {0} bytes, over the {MAX_PHOTOS_TOTAL_BYTES} limit")]
+    PhotosTooLarge(usize),
     #[error("too many photos (max {MAX_PHOTOS})")]
     TooManyPhotos,
     #[error("thumbnail exceeds {MAX_THUMBNAIL_BYTES} bytes")]
@@ -424,7 +445,32 @@ pub struct Search {
 pub struct PhotoRef {
     pub hash: [u8; 32],
     /// True for the tile image shown in the grid.
+    ///
+    /// Exactly one photo carries this. Validation enforces it rather than
+    /// trusting callers: two primaries means two clients rendering the same
+    /// profile disagree about whose face it is, and zero means a profile
+    /// with photos shows none.
     pub is_primary: bool,
+    /// The image itself.
+    ///
+    /// Stored inline rather than behind the hash. The hash-only version was
+    /// aspirational — it referred to chunked blobs that were never written,
+    /// so a profile could name a primary photo it had no way to display.
+    /// Inline is honest at this size and removes a fetch that could hit an
+    /// evicted contract at the exact moment someone opens a profile.
+    #[serde(default, with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+impl PhotoRef {
+    /// Build a reference from image bytes, hashing them for identity.
+    pub fn new(bytes: Vec<u8>, is_primary: bool) -> Self {
+        Self {
+            hash: *blake3::hash(&bytes).as_bytes(),
+            is_primary,
+            bytes,
+        }
+    }
 }
 
 /// The mutable, owner-signed body of a profile.
@@ -463,6 +509,26 @@ impl ProfileBody {
         }
         if self.tags.len() > MAX_TAGS || self.tags.iter().any(|t| t.len() > MAX_TAG_BYTES) {
             return Err(ProfileError::BadTags);
+        }
+        // Exactly one primary, whenever there are photos at all. Enforced
+        // rather than assumed: two primaries makes two clients disagree
+        // about whose face this profile shows, and zero makes a profile
+        // with photos display none of them.
+        if !self.photos.is_empty() {
+            let primaries = self.photos.iter().filter(|p| p.is_primary).count();
+            if primaries != 1 {
+                return Err(ProfileError::PrimaryPhoto(primaries));
+            }
+        }
+        let mut total = 0usize;
+        for p in &self.photos {
+            if p.bytes.len() > MAX_PHOTO_BYTES {
+                return Err(ProfileError::PhotoTooLarge);
+            }
+            total += p.bytes.len();
+        }
+        if total > MAX_PHOTOS_TOTAL_BYTES {
+            return Err(ProfileError::PhotosTooLarge(total));
         }
         if self.photos.len() > MAX_PHOTOS {
             return Err(ProfileError::TooManyPhotos);
@@ -1261,6 +1327,88 @@ mod gender_tests {
             a.signing_payload_current(&p).unwrap(),
             b.signing_payload_current(&p).unwrap(),
             "nobody may rewrite someone's stated gender in transit"
+        );
+    }
+}
+
+#[cfg(test)]
+mod photo_tests {
+    use super::*;
+
+    fn body(photos: Vec<PhotoRef>) -> ProfileBody {
+        ProfileBody {
+            display_name: "sam".into(),
+            photos,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_profile_with_photos_needs_exactly_one_primary() {
+        let a = PhotoRef::new(vec![1; 128], true);
+        let b = PhotoRef::new(vec![2; 128], false);
+        assert!(body(vec![a.clone(), b.clone()]).validate().is_ok());
+
+        // Two primaries: clients would disagree about whose face this is.
+        assert_eq!(
+            body(vec![PhotoRef::new(vec![1; 8], true), PhotoRef::new(vec![2; 8], true)])
+                .validate(),
+            Err(ProfileError::PrimaryPhoto(2))
+        );
+
+        // None: a profile with photos that displays none of them.
+        assert_eq!(
+            body(vec![PhotoRef::new(vec![1; 8], false)]).validate(),
+            Err(ProfileError::PrimaryPhoto(0))
+        );
+    }
+
+    /// No photos is fine — that is a new user, not an invalid profile.
+    #[test]
+    fn no_photos_is_valid() {
+        assert!(body(vec![]).validate().is_ok());
+    }
+
+    #[test]
+    fn an_oversized_photo_is_rejected() {
+        let big = PhotoRef::new(vec![0; MAX_PHOTO_BYTES + 1], true);
+        assert_eq!(body(vec![big]).validate(), Err(ProfileError::PhotoTooLarge));
+    }
+
+    /// The total matters more than any single photo: it is what a peer
+    /// replicating this contract actually pays.
+    #[test]
+    fn photos_are_capped_in_aggregate_not_just_individually() {
+        let each = MAX_PHOTO_BYTES;
+        let mut photos = vec![PhotoRef::new(vec![0; each], true)];
+        for i in 1..8 {
+            photos.push(PhotoRef::new(vec![i as u8; each], false));
+        }
+        // Every photo is individually legal.
+        assert!(photos.iter().all(|p| p.bytes.len() <= MAX_PHOTO_BYTES));
+        assert!(matches!(
+            body(photos).validate(),
+            Err(ProfileError::PhotosTooLarge(_))
+        ));
+    }
+
+    /// Changing which photo is primary must change the signed bytes, or a
+    /// peer could swap someone's main photo without breaking the signature.
+    #[test]
+    fn the_primary_choice_is_covered_by_the_signature() {
+        let params = ProfileParams { schema_v: 1, address: [3; ADDRESS_BYTES] };
+        let a = body(vec![
+            PhotoRef::new(vec![1; 64], true),
+            PhotoRef::new(vec![2; 64], false),
+        ]);
+        let b = body(vec![
+            PhotoRef::new(vec![1; 64], false),
+            PhotoRef::new(vec![2; 64], true),
+        ]);
+        assert_ne!(
+            a.signing_payload(&params).unwrap(),
+            b.signing_payload(&params).unwrap(),
+            "which photo is primary must be signed, or it can be swapped"
         );
     }
 }
