@@ -1164,3 +1164,49 @@ permission refused, or a desktop build with no bridge — the UI shows a
 sample area with a `sample` badge on the cell and says so in the status
 line. Showing someone a grid of people 3,000 km away as though they were
 nearby would be worse than showing nothing.
+
+## Profile editor and photos (2026-08-01)
+
+A Profile tab with name, headline, age, gender, position chips, HIV-status
+chips, bio and a photo. Everything is optional **except age** — a required
+field in an app like this is a field people lie in, and a lie in a profile
+is worse than a blank. Age is the exception because 18+ is a legal
+obligation everywhere this could ship.
+
+### EXIF is stripped by construction, not by parsing
+
+The chosen photo is drawn to a `<canvas>` and re-encoded. A canvas holds
+**pixels, not a file container**, so orientation tags, camera model,
+timestamps and — the one that matters — **GPS coordinates** do not survive
+the round trip. Nothing in `photo.rs` parses EXIF, which means nothing in
+it can miss a variant of EXIF.
+
+This is not a nicety. A phone photo routinely carries the exact coordinates
+it was taken at. Publishing one to a public presence tile would hand any
+scraper the precise location that the entire cell-and-jitter design exists
+to withhold — **a complete bypass of the app's central privacy property,
+through its most ordinary feature.** A parser could be out of date; a
+canvas cannot be.
+
+The UI says so where the user is choosing: *"Your photo is resized on this
+device and its location data is removed before it is ever published."*
+
+### Size is enforced before anything is signed
+
+256 px square, centre-cropped so faces are not distorted, re-encoded to
+WebP with a descending quality ladder until it fits under 16 KiB — and
+**failing rather than publishing something oversized**. Every phone in a
+cell downloads every tile in it, so thumbnail bytes are the single number
+deciding whether the grid is usable on mobile data.
+
+### Health data is labelled where it is entered
+
+The status chips carry: *"Health information stays in your profile and is
+never put on the public grid. Only people you share your profile with can
+see it."* The enforcement is a test; the sentence is so the user knows it
+without reading one.
+
+**Not yet wired:** saving writes the draft to this device only. Publishing
+the signed profile and republishing the presence tile with the new
+thumbnail is the next step — the crypto and contracts for both already
+exist and are tested.

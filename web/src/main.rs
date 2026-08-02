@@ -587,11 +587,10 @@ fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
         let files = evt.files();
         spawn(async move {
             let Some(first) = files.into_iter().next() else { return };
-            let bytes = first.contents().to_vec();
-            if bytes.is_empty() {
+            let Ok(bytes) = first.read_bytes().await else {
                 status.set("could not read that file".into());
                 return;
-            }
+            };
             busy.set(true);
             status.set("processing…".into());
 

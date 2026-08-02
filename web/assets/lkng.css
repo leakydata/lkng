@@ -188,3 +188,83 @@ main {
   color: #d0455a;
   font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
 }
+
+/* ---- tab bar ---- */
+.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex;
+  background: rgba(13, 14, 18, .94);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tab {
+  flex: 1; padding: 13px 8px;
+  background: none; border: none;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 500;
+  cursor: pointer;
+}
+.tab.on { color: var(--accent); }
+
+/* keep the last row of tiles clear of the fixed tab bar */
+main { padding-bottom: 76px; }
+.foot { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+main.hidden { display: none; }
+
+/* ---- profile editor ---- */
+.editor { padding-bottom: 92px; }
+.editor .bar { justify-content: space-between; }
+.linkish {
+  background: none; border: none; color: var(--accent);
+  font: inherit; font-weight: 600; cursor: pointer; padding: 4px 2px;
+}
+
+.form { padding: 14px 16px; max-width: 560px; margin: 0 auto; }
+
+.photo-pick {
+  position: relative; display: block;
+  width: 132px; height: 132px; margin: 0 auto 12px;
+  border-radius: 16px; cursor: pointer; overflow: hidden;
+  background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px;
+  border: 1px dashed var(--line);
+}
+.photo-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+.field { margin: 14px 0; }
+.flabel {
+  display: block; margin-bottom: 6px;
+  color: var(--muted); font-size: 12px;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.field input, .field textarea {
+  width: 100%; padding: 11px 12px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px;
+  font: inherit; resize: vertical;
+}
+.field input:focus, .field textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  padding: 8px 12px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.status {
+  margin: 14px 0 0; padding: 10px 12px;
+  border-radius: 10px; background: rgba(224, 86, 122, .1);
+  color: var(--text); font-size: 13px;
+}
+.primary.wide {
+  width: 100%; margin-top: 18px; padding: 13px;
+  border-radius: 11px; border: 1px solid var(--accent);
+  background: var(--accent); color: #fff;
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+.primary.wide:disabled { opacity: .6; }
