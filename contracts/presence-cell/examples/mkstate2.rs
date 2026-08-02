@@ -12,6 +12,7 @@ fn main() {
         position: 0,
         age_band: 0,
         verifying_key: None,
+        encryption_key: None,
         writer_cert: None,
         sig: vec![2u8; 64],
     });

@@ -1829,3 +1829,36 @@ with nothing to explain why.
 addresses the off-condition only. Bandwidth and connection limits do not
 obviously explain that much CPU, so the next question is what the node is
 actually doing — and that is a measurement, not a guess.
+
+## 2026-08-01 — what the 41% is actually doing
+
+Followed the CPU to its source rather than guessing. The node's own logs:
+
+```text
+[RATE LIMIT per-callsite] summarize_contract_state: dropped 1780 in last 30s
+                                                   (cumulative: 409369)
+```
+
+Against a 30/sec cap, that is **~89 calls per second, sustained**, on an idle
+node. Each one runs `summarize_state` inside WASM.
+
+**Our contract made it much worse than it had to be.** `summarize_state`
+decoded the entire `CellState` — up to 500 records, each with a 16 KiB
+thumbnail — purely to collect the map keys. At 89 calls/sec that is megabytes
+of deserialisation per second, thrown away except for a set of ids.
+
+Fixed with `summary_from_bytes`, which decodes the keys and skips each value
+with `serde::de::IgnoredAny`, so thumbnails are scanned rather than
+allocated. A test asserts it produces exactly the same summary as the full
+decode — if the two ever diverged, peers would exchange deltas against a
+summary that does not describe their state, and convergence would fail in a
+way that looks like random message loss.
+
+The call rate itself is upstream's. Drafted as
+[`docs/upstream-issues/summarize-contract-state-call-rate.md`](upstream-issues/summarize-contract-state-call-rate.md)
+— **not filed**: it needs a minimal reproduction against a stock node first,
+because "our app is slow" is not an upstream bug report.
+
+Worth noting why this went unseen: on a desktop, 41% of a core is invisible.
+It is only a phone that makes this the difference between a viable background
+service and one users uninstall.

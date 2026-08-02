@@ -100,12 +100,12 @@ impl ContractInterface for Contract {
         _parameters: Parameters<'static>,
         state: State<'static>,
     ) -> Result<StateSummary<'static>, ContractError> {
-        let summary: BTreeSet<RecordId> = if state.as_ref().is_empty() {
-            BTreeSet::new()
-        } else {
-            let cell: CellState = decode(state.as_ref(), "state")?;
-            cell.summary()
-        };
+        // Keys only. The node calls this ~89 times a second on an idle
+        // phone, and decoding the whole state to collect its keys means
+        // parsing up to 500 records with a 16 KiB thumbnail each -- megabytes
+        // per second, discarded except for the keys.
+        let summary = lkng_presence::summary_from_bytes(state.as_ref())
+            .map_err(|e| ContractError::Deser(format!("summary: {e}")))?;
         Ok(StateSummary::from(encode(&summary)?))
     }
 
@@ -148,6 +148,7 @@ mod tests {
             position: 0,
             age_band: 0,
             verifying_key: None,
+            encryption_key: None,
             writer_cert: None,
             sig: vec![seed; 64],
         }
