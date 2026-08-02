@@ -1024,4 +1024,48 @@ mod reachability_tests {
             "a swapped encryption key must break the signature"
         );
     }
+
+    /// The whole point of a per-epoch encryption key: it must rotate.
+    ///
+    /// If this ever fails, the tile carries a stable identifier and pseudonym
+    /// rotation is cosmetic — a scraper subscribed to cells could link one
+    /// person across every epoch and area they ever appeared in.
+    #[test]
+    fn encryption_key_rotates_with_the_epoch() {
+        let id = Identity::from_seed([7u8; 32]);
+        let a = id.for_epoch(100).encryption_public_key();
+        let b = id.for_epoch(101).encryption_public_key();
+        assert_ne!(a, b, "encryption key must differ across epochs");
+        assert_ne!(
+            a,
+            id.encryption_public_key(),
+            "an epoch key must never equal the durable key"
+        );
+        assert_eq!(
+            a,
+            id.for_epoch(100).encryption_public_key(),
+            "the same epoch must reproduce the same key, or sealed mail is unreadable"
+        );
+    }
+
+    /// The encryption key must be covered by the record signature.
+    ///
+    /// Unsigned, anyone able to write to a cell could substitute their own
+    /// key; every "encrypted" first message would then be sealed to the
+    /// attacker, who could read it and re-seal it onward undetected.
+    #[test]
+    fn a_swapped_encryption_key_breaks_the_tile_signature() {
+        let id = Identity::from_seed([9u8; 32]);
+        let params = params("9q8yy", 42);
+        let mut rec = blank_record();
+        id.sign_presence(&mut rec, &params).unwrap();
+        let vk = rec.verifying_key.clone().unwrap();
+        assert!(verify_presence(&rec, &params, &vk).is_ok());
+
+        rec.encryption_key = Some(vec![0xAB; 32]);
+        assert!(
+            verify_presence(&rec, &params, &vk).is_err(),
+            "a substituted encryption key must invalidate the record"
+        );
+    }
 }
