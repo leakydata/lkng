@@ -63,6 +63,15 @@ pub struct Tile {
     pub age_band: u8,
     /// Position code for filtering; 0 means unstated.
     pub position: u8,
+    /// X25519 key a first message to this person is sealed to, copied from
+    /// the record after its signature verified.
+    ///
+    /// `None` means "cannot be messaged" — an older client, or a record whose
+    /// key failed validation. The UI must treat that as a disabled button and
+    /// not as a reason to fall back to anything unencrypted; there is no
+    /// degraded mode here, because a plaintext first message on this network
+    /// is public forever.
+    pub encryption_key: Option<[u8; 32]>,
 }
 
 /// Where the user is, expressed only as coarse cells.
@@ -391,6 +400,14 @@ impl Grid {
                 same_cell: params.cell_id == home.as_str(),
                 age_band: rec.age_band,
                 position: rec.position,
+                // Only reachable after `verify_self_contained` above, so this
+                // key is covered by a signature we checked. Copying it before
+                // verification would let anyone who can write to a cell
+                // substitute their own key and read the replies.
+                encryption_key: rec
+                    .encryption_key
+                    .as_deref()
+                    .and_then(|k| <[u8; 32]>::try_from(k).ok()),
             };
             // Keep the newest tile per person; ties break on pseudonym so
             // two clients rendering the same bytes agree.
