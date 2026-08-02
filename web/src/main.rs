@@ -762,7 +762,25 @@ fn App() -> Element {
                         "until they choose to share it."
                     }
                     div { class: "actions",
-                        button { class: "primary", "Say hello" }
+                        button {
+                            class: "primary",
+                            // No encryption key on their tile means no way to
+                            // reach them. Disabled rather than hidden, so the
+                            // reason can be said out loud below.
+                            disabled: t.encryption_key.is_none(),
+                            onclick: move |_| {
+                                open_thread.set(Some(t.pseudonym));
+                                tab.set(Tab::Messages);
+                                selected.set(None);
+                            },
+                            "Message"
+                        }
+                        if t.encryption_key.is_none() {
+                            p { class: "hint",
+                                "Their app is an older version that can't receive "
+                                "encrypted messages yet."
+                            }
+                        }
                         button {
                             class: "danger",
                             onclick: move |_| {
@@ -776,6 +794,25 @@ fn App() -> Element {
             }
         }
 
+
+        nav { class: "tabs",
+            for t in Tab::BAR {
+                button {
+                    key: "{t.label()}",
+                    class: if tab() == t { "tab on" } else { "tab" },
+                    onclick: move |_| { tab.set(t); open_thread.set(None); },
+                    div { class: "tab-icon", "{t.icon()}" }
+                    "{t.label()}"
+                    // Count, not a red dot: a dot says "something happened"
+                    // and makes people open the app to find out. A number is
+                    // the same information without the manufactured urgency,
+                    // which is the whole difference this app is arguing for.
+                    if t == Tab::Messages && !threads.is_empty() {
+                        span { class: "pip", "{threads.len()}" }
+                    }
+                }
+            }
+        }
 
         footer { class: "foot",
             "{visible.len()} nearby · build {BUILD_MARKER}"
@@ -791,6 +828,48 @@ fn App() -> Element {
             }
         }
     }
+}
+
+/// Seal a message to a tile and write it into the recipient's inbox.
+///
+/// # Why this seeds before it updates
+///
+/// To UPDATE a contract your node does not host, the code, parameters and a
+/// starting state have to travel with the request on the same session — a
+/// bare update against an unknown contract is rejected with "missing
+/// contract", which reads like a network fault and is not one. Messaging a
+/// stranger is precisely the case where their inbox is unknown to us, so the
+/// seed is the normal path here rather than a fallback.
+///
+/// The seeded state is an **empty** inbox. It cannot overwrite a real one:
+/// inbox state is a commutative merge, so seeding an empty state next to an
+/// existing one is a no-op, and the delta that follows carries the message.
+fn send_message(
+    node: &Node,
+    session: &Session,
+    tile: &Tile,
+    epoch: u64,
+    body: &str,
+) -> Result<(), String> {
+    let now = now_unix() * 1000;
+    let (env, params) = chat::seal_to_tile(session.identity(), tile, epoch, body, now)
+        .map_err(|e| e.to_string())?;
+
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(INBOX_WASM, &params_bytes);
+
+    // Empty starting state, so the update has a contract to land in.
+    let empty = lkng_inbox::InboxState::default();
+    node.seed(INBOX_WASM, &params_bytes, cbor(&empty));
+
+    // The delta is a state carrying exactly this envelope; the contract
+    // merges it in. Deltas are self-contained for the same reason presence
+    // records are (River #145) — a delta referring to something the peer has
+    // never seen is dropped without a word.
+    let mut delta = lkng_inbox::InboxState::default();
+    delta.insert(env);
+    node.update(key, cbor(&delta));
+    Ok(())
 }
 
 #[component]
