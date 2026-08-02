@@ -214,6 +214,29 @@ impl GridFilter {
             && self.positions.is_empty()
     }
 
+    /// Whether a tile survives this filter.
+    ///
+    /// Public because the UI had no way to apply a filter at all: this type
+    /// and its tests existed, and `matches` was private, so the filter could
+    /// be constructed and never used. It was.
+    pub fn keep(&self, t: &Tile) -> bool {
+        self.matches(t)
+    }
+
+    /// Apply the filter to a list of tiles.
+    ///
+    /// Filtering happens **client-side over already-public data**, so nothing
+    /// is transmitted about what you are looking for. That matters more here
+    /// than in most apps: search terms in this category are among the most
+    /// sensitive things a person types, and on a centralised service they are
+    /// the single most valuable thing to log.
+    pub fn apply(&self, tiles: Vec<Tile>) -> Vec<Tile> {
+        if self.is_empty() {
+            return tiles;
+        }
+        tiles.into_iter().filter(|t| self.matches(t)).collect()
+    }
+
     fn matches(&self, t: &Tile) -> bool {
         if self.same_cell_only && !t.same_cell {
             return false;
@@ -1424,5 +1447,83 @@ mod watch_set_tests {
             }
         }
         assert_eq!(set.len(), cov.cells.len() + 1, "9 neighbours + 1 previous-epoch home");
+    }
+}
+
+#[cfg(test)]
+mod grid_filter_ui_tests {
+    use super::*;
+
+    fn tile(age_band: u8, position: u8, headline: &str, same_cell: bool) -> Tile {
+        Tile {
+            pseudonym: [age_band.wrapping_add(position); 32],
+            headline: headline.into(),
+            thumbnail: vec![],
+            timestamp_ms: 1,
+            same_cell,
+            age_band,
+            position,
+            encryption_key: None,
+            verifying_key: None,
+        }
+    }
+
+    #[test]
+    fn an_empty_filter_keeps_everything() {
+        let tiles = vec![tile(3, 1, "a", true), tile(0, 0, "b", false)];
+        assert_eq!(GridFilter::default().apply(tiles.clone()).len(), 2);
+    }
+
+    #[test]
+    fn position_filters_are_inclusive_of_the_listed_codes_only() {
+        let f = GridFilter { positions: vec![1, 5], ..Default::default() };
+        let tiles = vec![
+            tile(3, 1, "top", true),
+            tile(3, 3, "vers", true),
+            tile(3, 5, "btm", true),
+        ];
+        let kept = f.apply(tiles);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|t| t.position == 1 || t.position == 5));
+    }
+
+    /// Someone who stated nothing must not be swept into a band filter.
+    ///
+    /// A filter that silently includes people who declined to answer is a
+    /// lie told to the person filtering, and it puts the people who withheld
+    /// the information in front of exactly the audience that filtered for it.
+    #[test]
+    fn unstated_attributes_never_match_a_filter() {
+        let f = GridFilter { age_bands: Some((2, 4)), ..Default::default() };
+        let kept = f.apply(vec![tile(0, 0, "unstated", true), tile(3, 0, "30s", true)]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].age_band, 3);
+    }
+
+    #[test]
+    fn same_cell_only_excludes_neighbours() {
+        let f = GridFilter { same_cell_only: true, ..Default::default() };
+        let kept = f.apply(vec![tile(3, 1, "here", true), tile(3, 1, "next door", false)]);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].same_cell);
+    }
+
+    /// Filters compose: each one narrows, none of them widens.
+    #[test]
+    fn filters_combine_rather_than_replace() {
+        let f = GridFilter {
+            age_bands: Some((3, 3)),
+            positions: vec![1],
+            same_cell_only: true,
+            ..Default::default()
+        };
+        let kept = f.apply(vec![
+            tile(3, 1, "match", true),
+            tile(3, 1, "wrong cell", false),
+            tile(4, 1, "wrong age", true),
+            tile(3, 5, "wrong position", true),
+        ]);
+        assert_eq!(kept.len(), 1, "only the tile matching every criterion survives");
+        assert_eq!(kept[0].headline, "match");
     }
 }

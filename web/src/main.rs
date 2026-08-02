@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b85418";
+pub const BUILD_MARKER: &str = "b85800";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -889,6 +889,8 @@ fn App() -> Element {
     let mut reporting = use_signal(|| None::<[u8; 32]>);
     let mut album_msg = use_signal(|| None::<String>);
     let mut book = use_signal(load_book);
+    let mut filter = use_signal(lkng_app::GridFilter::default);
+    let mut filters_open = use_signal(|| false);
     let mut note_draft = use_signal(String::new);
     let mut dismissed = use_signal(dismissed_backup);
     let _ = dismissed();
@@ -902,10 +904,16 @@ fn App() -> Element {
             .unwrap_or_default()
     };
     let mut report_done = use_signal(|| false);
-    let visible: Vec<Tile> = tiles
+    let unfiltered: Vec<Tile> = tiles
         .into_iter()
         .filter(|t| !blocked.read().contains(&t.pseudonym))
         .collect();
+    let hidden_by_filter = unfiltered.len();
+    // Client-side, over data already fetched. Nothing about what you are
+    // looking for is transmitted -- which on a centralised service is the
+    // single most valuable thing they log about this category of app.
+    let visible: Vec<Tile> = filter.read().apply(unfiltered);
+    let hidden_by_filter = hidden_by_filter - visible.len();
 
     // Inbox: whatever the node currently holds for our own inbox contract,
     // decrypted here and nowhere else. Recomputed each render off the shared
@@ -1373,6 +1381,99 @@ fn App() -> Element {
         }
 
         main { class: if tab() == Tab::Browse { "" } else { "hidden" },
+            div { class: "filterbar",
+                button {
+                    class: if filter.read().is_empty() { "chip" } else { "chip on" },
+                    onclick: move |_| filters_open.set(!filters_open()),
+                    if filter.read().is_empty() { "Filters" } else { "Filters ·" }
+                }
+                if !filter.read().is_empty() {
+                    button {
+                        class: "chip",
+                        onclick: move |_| filter.set(lkng_app::GridFilter::default()),
+                        "Clear"
+                    }
+                    span { class: "chip-note", "{hidden_by_filter} hidden" }
+                }
+            }
+
+            if filters_open() {
+                div { class: "filters",
+                    div { class: "flabel", "Position" }
+                    div { class: "chiprow",
+                        for (code, label) in [
+                            (1u8, "Top"), (2, "Verse top"), (3, "Versatile"),
+                            (4, "Verse bottom"), (5, "Bottom"), (6, "Side"),
+                        ] {
+                            button {
+                                key: "pos-{code}",
+                                class: if filter.read().positions.contains(&code) {
+                                    "chip on"
+                                } else {
+                                    "chip"
+                                },
+                                onclick: move |_| {
+                                    let mut f = filter.write();
+                                    if let Some(i) = f.positions.iter().position(|c| *c == code) {
+                                        f.positions.remove(i);
+                                    } else {
+                                        f.positions.push(code);
+                                    }
+                                },
+                                "{label}"
+                            }
+                        }
+                    }
+
+                    div { class: "flabel", "Age" }
+                    div { class: "chiprow",
+                        for (lo, hi, label) in [
+                            (1u8, 2u8, "Under 30"), (3, 3, "30s"),
+                            (4, 4, "40s"), (5, 9, "50+"),
+                        ] {
+                            button {
+                                key: "age-{lo}-{hi}",
+                                class: if filter.read().age_bands == Some((lo, hi)) {
+                                    "chip on"
+                                } else {
+                                    "chip"
+                                },
+                                onclick: move |_| {
+                                    let mut f = filter.write();
+                                    f.age_bands = if f.age_bands == Some((lo, hi)) {
+                                        None
+                                    } else {
+                                        Some((lo, hi))
+                                    };
+                                },
+                                "{label}"
+                            }
+                        }
+                    }
+
+                    div { class: "chiprow",
+                        button {
+                            class: if filter.read().same_cell_only { "chip on" } else { "chip" },
+                            onclick: move |_| {
+                                let mut f = filter.write();
+                                f.same_cell_only = !f.same_cell_only;
+                            },
+                            "My area only"
+                        }
+                    }
+
+                    p { class: "hint",
+                        "Filters run on this device over tiles you already have. "
+                        "Nothing about what you are looking for is sent anywhere — "
+                        "there is nobody to send it to."
+                    }
+                    p { class: "hint",
+                        "People who did not state an age or position are hidden by "
+                        "those filters rather than quietly included."
+                    }
+                }
+            }
+
             p { class: "note", "{note}" }
 
             div { class: "grid",

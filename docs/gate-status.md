@@ -2337,3 +2337,29 @@ project exists to refuse, and PLAN.md said so before any of this was written.
 
 The Taps screen already covers the underlying want — *someone noticed me* —
 with the person choosing to send it.
+
+## 2026-08-02 — grid filters, the fifth unwired library
+
+`GridFilter` — age bands, positions, headline, same-cell-only, with tests —
+appeared **zero times** in the UI, and `matches` was private, so the type
+could be constructed and never applied. It was constructed nowhere either.
+
+Fifth instance today of the same shape. At this point the pattern is worth
+naming as a property of the codebase rather than a run of coincidences:
+**this project has consistently built the hard, testable half of a feature
+and left the last wire unconnected**, and because nothing fails when a
+library goes unused, every one of them looked finished from the inside.
+
+The filter bar now sits above the grid, matching the layout in the
+reference screenshots: position chips, age bands, my-area-only.
+
+Two things the copy says out loud, because both are choices:
+
+- **Filters run on this device over tiles already fetched.** Nothing about
+  what someone is looking for is transmitted — there is nobody to transmit it
+  to. On a centralised service in this category, that query is the single
+  most valuable thing logged about a person.
+- **People who stated nothing are hidden by a filter, not quietly included.**
+  A filter that sweeps in non-answers lies to the person filtering, and puts
+  the people who withheld information in front of exactly the audience that
+  filtered for it. Tested.
