@@ -48,6 +48,13 @@ const CELL_WASM: &[u8] = include_bytes!(
     "../../contracts/presence-cell/target/wasm32-unknown-unknown/release/presence_cell.wasm"
 );
 
+/// Compiled inbox contract, embedded for the same reason as [`CELL_WASM`]:
+/// the first message to someone whose inbox nobody near you hosts has to
+/// carry the code, or the write has nowhere to land.
+const INBOX_WASM: &[u8] = include_bytes!(
+    "../../contracts/inbox/target/wasm32-unknown-unknown/release/inbox_contract.wasm"
+);
+
 fn main() {
     dioxus::launch(App);
 }
