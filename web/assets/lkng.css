@@ -399,3 +399,6 @@ button.secondary:disabled { opacity: .45; }
   color: var(--muted); font-size: 12.5px;
 }
 .visnote.on { color: var(--accent); }
+
+.row { display: flex; gap: 8px; margin-top: 8px; }
+.row button { flex: 1; padding: 9px 12px; border-radius: 10px; }

@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b33158";
+pub const BUILD_MARKER: &str = "b33302";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -214,10 +214,35 @@ fn me() -> Session {
 }
 
 /// Where the app believes the user is, and how sure it is.
+impl Fix {
+    /// Whether this is a position the user has actually asserted, and so one
+    /// we may publish. The fallback area is not: publishing against it would
+    /// place someone in a distant cell, visible to strangers, without them
+    /// having gone anywhere or asked for anything.
+    fn is_publishable(self) -> bool {
+        matches!(self, Fix::Device | Fix::Manual)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Fix {
     /// From the device, via the coarse-location bridge.
     Device,
+    /// Set by hand by the user.
+    ///
+    /// Treated as publishable, like a real fix. That is deliberate: a
+    /// claimed position is unverifiable on this network *anyway* — the app
+    /// runs on the user's hardware and nothing can stop them lying about
+    /// where they are (see PLAN.md, "location fraud: accepted and
+    /// documented"). Refusing to publish a manual location would not buy
+    /// any integrity; it would only deny the honest uses — travelling,
+    /// checking a neighbourhood before moving there, or simply not wanting
+    /// to hand a dating app your GPS.
+    ///
+    /// It is a *separate* variant rather than a lie about `Device` so the
+    /// UI can say which one is in force, and so no future code can confuse
+    /// "the user told us" with "the platform told us".
+    Manual,
     /// Permission granted but no position yet — Android has not returned
     /// a last-known fix.
     Waiting,
@@ -255,11 +280,58 @@ fn now_unix() -> u64 {
 /// someone a grid of people 3,000 km away as though they were nearby would
 /// be worse than showing nothing, so the UI says which case it is in
 /// rather than quietly pretending.
+/// Parse a "lat, lon" pair, rejecting anything out of range.
+///
+/// Returns `None` rather than clamping: a clamped coordinate is a *different
+/// place*, and silently relocating someone who mistyped is worse than telling
+/// them the input was wrong.
+fn parse_latlon(s: &str) -> Option<(f64, f64)> {
+    let (a, b) = s.split_once(',')?;
+    let lat: f64 = a.trim().parse().ok()?;
+    let lon: f64 = b.trim().parse().ok()?;
+    (lat.abs() <= 90.0 && lon.abs() <= 180.0).then_some((lat, lon))
+}
+
+/// Storage key for a hand-set location.
+const MANUAL_LOC_KEY: &str = "lkng.location.manual.v1";
+
+/// The user's hand-set position, if they have chosen one.
+fn manual_position() -> Option<(f64, f64)> {
+    let s = web_sys::window()?.local_storage().ok()??.get_item(MANUAL_LOC_KEY).ok()??;
+    let (a, b) = s.split_once(',')?;
+    let (lat, lon): (f64, f64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+    // Reject out-of-range values rather than passing them to `coverage`,
+    // which treats them as a programmer error and panics. This value comes
+    // from storage, so it is input, not an invariant.
+    (lat.abs() <= 90.0 && lon.abs() <= 180.0).then_some((lat, lon))
+}
+
+fn set_manual_position(v: Option<(f64, f64)>) {
+    let Some(store) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return;
+    };
+    match v {
+        Some((lat, lon)) => {
+            let _ = store.set_item(MANUAL_LOC_KEY, &format!("{lat},{lon}"));
+        }
+        None => {
+            let _ = store.remove_item(MANUAL_LOC_KEY);
+        }
+    }
+}
+
 fn coverage_for(s: &Session) -> (Coverage, Fix) {
-    let (pos, fix) = match device_position() {
+    // A hand-set location wins over the device. If someone has explicitly
+    // said where they want to appear, silently overriding them with GPS is
+    // the app deciding it knows better about the one thing they most
+    // clearly asked to control.
+    let (pos, fix) = match manual_position() {
+        Some(p) => (p, Fix::Manual),
+        None => match device_position() {
         Some(p) => (p, Fix::Device),
         None if location_bridge_present() => ((37.7749, -122.4194), Fix::Waiting),
         None => ((37.7749, -122.4194), Fix::None),
+        },
     };
     let cov = s
         .coverage(pos.0, pos.1, now_unix())
@@ -595,7 +667,7 @@ fn App() -> Element {
     // Mirrors the gate in `publish_presence` exactly. Kept as one expression
     // so the UI cannot claim visibility the publisher would refuse.
     let visible_to_others = status == Status::Connected
-        && fix == Fix::Device
+        && fix.is_publishable()
         && !draft.read().headline.trim().is_empty();
 
     let note = match (&status, live) {
@@ -605,6 +677,9 @@ fn App() -> Element {
         }
         (Status::Connected, false) => match fix {
             Fix::Device => "Connected — nobody in your area yet.".to_string(),
+            Fix::Manual => {
+                "Connected — nobody in the area you picked yet.".to_string()
+            }
             Fix::Waiting => {
                 "Connected. Waiting for your location — the grid below is a sample."
                     .to_string()
@@ -643,7 +718,7 @@ fn App() -> Element {
             div { class: "cell",
                 span { class: if live { "dot" } else { "dot off" } }
                 "{cov.home.as_str()}"
-                if fix != Fix::Device {
+                if !fix.is_publishable() {
                     span { class: "badge-sample", "sample" }
                 }
             }
@@ -967,7 +1042,7 @@ fn App() -> Element {
                 class: if visible_to_others { "visnote on" } else { "visnote" },
                 if visible_to_others {
                     "You're visible in {cov.home.as_str()}"
-                } else if fix != Fix::Device {
+                } else if !fix.is_publishable() {
                     "You're not visible — waiting for your location"
                 } else if draft.read().headline.trim().is_empty() {
                     "You're not visible — add a headline to appear in the grid"
@@ -1025,8 +1100,8 @@ fn publish_presence(
     draft: &Draft,
     fix: Fix,
 ) -> Result<(), String> {
-    if fix != Fix::Device {
-        return Err("no device location yet".into());
+    if !fix.is_publishable() {
+        return Err("no location yet".into());
     }
     if draft.headline.trim().is_empty() {
         return Err("no headline yet".into());
@@ -1368,6 +1443,10 @@ fn avatar_style(thumb: &[u8]) -> String {
 /// buries.
 #[component]
 fn SettingsPanel(onclose: EventHandler<()>) -> Element {
+    let mut manual = use_signal(|| {
+        manual_position().map(|(a, b)| format!("{a}, {b}")).unwrap_or_default()
+    });
+    let mut loc_msg = use_signal(|| None::<String>);
     rsx! {
         section { class: "editor",
             header { class: "bar",
@@ -1391,6 +1470,52 @@ fn SettingsPanel(onclose: EventHandler<()>) -> Element {
                         "Coarse only. Your position becomes a roughly 5 km area on this "
                         "device before anything is shared, with a random offset. No "
                         "distance is ever calculated or published."
+                    }
+                    div { class: "sval",
+                        "You can set it by hand instead — useful when travelling, or if "
+                        "you would rather not give a dating app your GPS at all. Nothing "
+                        "on this network can verify anyone's location, including yours, "
+                        "so this takes nothing away from anybody."
+                    }
+                    input {
+                        r#type: "text",
+                        placeholder: "latitude, longitude — e.g. 51.5074, -0.1278",
+                        value: "{manual}",
+                        oninput: move |e| manual.set(e.value()),
+                    }
+                    div { class: "row",
+                        button {
+                            class: "primary",
+                            onclick: move |_| {
+                                let v = manual.peek().clone();
+                                match parse_latlon(&v) {
+                                    Some(p) => {
+                                        set_manual_position(Some(p));
+                                        loc_msg.set(Some(
+                                            "Saved. Reopen the app to move to that area."
+                                                .into(),
+                                        ));
+                                    }
+                                    None => loc_msg.set(Some(
+                                        "That does not look like a latitude and longitude."
+                                            .into(),
+                                    )),
+                                }
+                            },
+                            "Use this location"
+                        }
+                        button {
+                            class: "secondary",
+                            onclick: move |_| {
+                                set_manual_position(None);
+                                manual.set(String::new());
+                                loc_msg.set(Some("Back to using this device's location.".into()));
+                            },
+                            "Use my device"
+                        }
+                    }
+                    if let Some(m) = loc_msg() {
+                        div { class: "sval", "{m}" }
                     }
                 }
                 div { class: "setting",
