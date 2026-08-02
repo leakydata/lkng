@@ -93,15 +93,30 @@ echo "    verified: $(basename "$WASM") contains $MARKER"
 NODES=("$@")
 [ ${#NODES[@]} -gt 0 ] || NODES=("")
 
+# Track whether anything actually landed. The marker is stamped into the
+# source *before* the build, so a failed publish leaves the source claiming a
+# version that exists nowhere -- and the next person to compare source
+# against a node concludes the node is stale when it is the source that is
+# lying. Observed exactly that after two publishes failed on a restarting
+# node.
+PUBLISHED=0
 for node in "${NODES[@]}"; do
   label="${node:-local}"
   echo "==> publishing to $label"
   if [ -z "$node" ]; then
-    fdev website update --key lkng "$OUT" --timeout 400
+    fdev website update --key lkng "$OUT" --timeout 400 && PUBLISHED=1
   else
-    fdev --node-url "$node" website update --key lkng "$OUT" --timeout 400
+    fdev --node-url "$node" website update --key lkng "$OUT" --timeout 400 && PUBLISHED=1
   fi
 done
+
+if [ "$PUBLISHED" = 0 ]; then
+  echo >&2
+  echo "FAIL: nothing published. web/src/main.rs now carries marker $MARKER," >&2
+  echo "      which no node serves. Re-run once the node is reachable, or the" >&2
+  echo "      source and the network disagree about what the current build is." >&2
+  exit 1
+fi
 
 echo
 echo "published build $MARKER"

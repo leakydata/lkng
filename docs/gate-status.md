@@ -2198,3 +2198,22 @@ maintainer who ran it for ninety minutes.
 
 The `summarize_contract_state` rate and the 0.4%-vs-28% contract dependency
 are unaffected: both were measured directly rather than extrapolated.
+
+## 2026-08-02 — the publish script could make the source lie
+
+Final verification found source and nodes disagreeing: both served an older
+build than `web/src/main.rs` claimed. Not a stale node — a stale *source*.
+
+`publish-ui.sh` stamps the marker into the source **before** building, which
+is necessary (the marker has to be in the wasm it verifies). But two publish
+attempts had failed against a restarting node, and each left a fresh marker
+in the source describing a build that exists nowhere. The next comparison
+then reads as "the node is stale", which is exactly backwards, and is the
+diagnosis that cost most of yesterday.
+
+The script now tracks whether any publish succeeded and **fails loudly** if
+none did, naming the marker that is now orphaned in the source.
+
+A tool built to stop one class of silent inconsistency had quietly created
+another. That it took a routine verification pass to notice is the argument
+for running one.
