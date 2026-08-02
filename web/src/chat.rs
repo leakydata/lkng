@@ -270,3 +270,107 @@ pub fn seal_to_tile(
 fn tile_verifying_key(tile: &Tile) -> Option<Vec<u8>> {
     tile.verifying_key.clone()
 }
+
+// ---------------------------------------------------------------------------
+// Local record of what we sent
+// ---------------------------------------------------------------------------
+
+/// Storage key for the local sent-message log.
+const SENT_KEY: &str = "lkng.sent.v1";
+
+/// One sent message, as persisted.
+///
+/// Deliberately *not* the same type as [`Message`]: this is a wire format
+/// written to disk and read back by future versions, so it gets its own
+/// struct with `#[serde(default)]` room to grow. Serialising a UI type
+/// straight to storage is how a rendering tweak turns into unreadable
+/// history.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SentRecord {
+    pub peer: [u8; 32],
+    #[serde(default)]
+    pub tap: bool,
+    pub body: String,
+    pub sent_ms: u64,
+}
+
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// Everything we have sent, oldest first.
+///
+/// Lives in ordinary web storage rather than the Keystore vault: the vault
+/// holds key material, and widening it to arbitrary app data would enlarge
+/// the surface that a WebView compromise can reach for the sake of message
+/// text that the peer already has a copy of. The identity seed is what must
+/// not leak; a sent message is not in that category.
+pub fn load_sent() -> Vec<SentRecord> {
+    let Some(s) = storage() else {
+        return Vec::new();
+    };
+    let Ok(Some(json)) = s.get_item(SENT_KEY) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+/// Append one sent message.
+///
+/// Failure here is deliberately quiet. The message has already gone onto the
+/// network by the time this runs, so refusing or erroring would report a
+/// failure that did not happen — the peer will receive it either way. What
+/// is lost is only our local copy of our own half.
+pub fn record_sent(rec: SentRecord) {
+    let Some(s) = storage() else { return };
+    let mut all = load_sent();
+    all.push(rec);
+    // Bound it. Without a cap this grows until web storage throws, and the
+    // first symptom would be sending appearing to break for no reason.
+    const MAX_SENT: usize = 2000;
+    let excess = all.len().saturating_sub(MAX_SENT);
+    all.drain(..excess);
+    if let Ok(json) = serde_json::to_string(&all) {
+        let _ = s.set_item(SENT_KEY, &json);
+    }
+}
+
+/// Fold our own sent messages into the threads read from the network.
+///
+/// Without this a conversation renders as only the other person's half,
+/// which reads as messages having failed to send.
+pub fn with_sent(mut threads: Vec<Thread>, sent: &[SentRecord], tiles: &[Tile]) -> Vec<Thread> {
+    for rec in sent {
+        let msg = Message {
+            from: rec.peer,
+            kind: if rec.tap { Kind::Tap } else { Kind::Text },
+            body: rec.body.clone(),
+            sent_ms: rec.sent_ms,
+            outgoing: true,
+        };
+        match threads.iter_mut().find(|t| t.peer == rec.peer) {
+            Some(t) => t.messages.push(msg),
+            None => {
+                // A conversation we started and they have not answered. It
+                // still belongs in the list: "I messaged them and heard
+                // nothing" is information, and hiding it looks like the
+                // message was never sent.
+                let headline = tiles
+                    .iter()
+                    .find(|t| t.pseudonym == rec.peer)
+                    .map(|t| t.headline.clone())
+                    .unwrap_or_else(|| "Someone nearby".to_string());
+                threads.push(Thread {
+                    peer: rec.peer,
+                    headline,
+                    messages: vec![msg],
+                });
+            }
+        }
+    }
+    for t in &mut threads {
+        t.messages.sort_by_key(|m| m.sent_ms);
+    }
+    threads.sort_by_key(|t| std::cmp::Reverse(t.last().map(|m| m.sent_ms).unwrap_or(0)));
+    threads
+}

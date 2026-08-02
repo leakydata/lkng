@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b32784";
+pub const BUILD_MARKER: &str = "b32890";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -538,7 +538,10 @@ fn App() -> Element {
                 &blocked.read(),
             ));
         }
-        chat::merge_threads(all)
+        let network = chat::merge_threads(all);
+        // Our own half of every conversation, which by design exists only
+        // here — see the module docs on why there is no "sent" contract.
+        chat::with_sent(network, &sent_log(), &visible)
     };
 
     // A thread with nothing but taps belongs on the Taps screen, not in
@@ -964,7 +967,26 @@ fn send_message(
     let mut delta = lkng_inbox::InboxState::default();
     delta.insert(env);
     node.update(key, cbor(&delta));
+
+    // Record our own half locally. Done after the write is dispatched, so a
+    // send that never leaves the node is not remembered as one that did.
+    chat::record_sent(chat::SentRecord {
+        peer: tile.pseudonym,
+        tap: matches!(kind, chat::Kind::Tap),
+        body: body.to_string(),
+        sent_ms: now,
+    });
     Ok(())
+}
+
+/// Reactive read of the local sent log.
+///
+/// Read through a signal so that sending re-renders the thread immediately
+/// rather than after the next network generation tick — otherwise a message
+/// appears to do nothing for up to half a second, which is exactly long
+/// enough for someone to press send twice.
+fn sent_log() -> Vec<chat::SentRecord> {
+    chat::load_sent()
 }
 
 #[component]
