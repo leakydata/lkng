@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b86202";
+pub const BUILD_MARKER: &str = "b86523";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -1099,7 +1099,7 @@ fn App() -> Element {
             }
         }
         if tab() == Tab::Settings {
-            SettingsPanel { onclose: move |_| tab.set(Tab::Browse) }
+            SettingsPanel { node: node.clone(), onclose: move |_| tab.set(Tab::Browse) }
         }
 
         if tab() == Tab::Messages {
@@ -2258,6 +2258,56 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
+/// Delete the account: tombstone the profile, then wipe the device.
+///
+/// # What this can and cannot do, exactly
+///
+/// It publishes a **signed tombstone** at the profile address with a
+/// sequence higher than any live body, so the profile cannot be revived by
+/// replaying an older one, and clients that fetch it see a deleted profile
+/// rather than stale content.
+///
+/// It then clears device storage — identity seed, drafts, photos, messages,
+/// favourites, notes, blocks.
+///
+/// What it **cannot** do is unpublish. Tiles already copied to peers stay
+/// where they are until their epoch expires, and anything anyone saved is
+/// theirs. Freenet has no delete, and no amount of UI can invent one. The
+/// confirmation says this in plain words rather than "your data has been
+/// deleted", which would be a lie of exactly the kind this app exists to
+/// avoid.
+///
+/// The order matters: tombstone **first**, wipe second. Wiping first would
+/// destroy the only key that can sign the tombstone, leaving the profile
+/// permanently live and unowned.
+fn delete_account(node: &Node, session: &Session) -> Result<(), String> {
+    let store = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+    let last_seq = store
+        .as_ref()
+        .and_then(|s| s.get_item(PROFILE_SEQ_KEY).ok().flatten())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let tomb = session
+        .identity()
+        // Well past the last live sequence, so a replayed older body cannot
+        // outrank the deletion even if a peer holds several.
+        .sign_profile_deletion(last_seq + 1000)
+        .map_err(|e| e.to_string())?;
+
+    let params = session.identity().profile_params();
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(PROFILE_WASM, &params_bytes);
+    node.seed_once(PROFILE_WASM, &params_bytes, cbor(&tomb));
+    node.update(key, cbor(&tomb));
+
+    // Only now destroy the key that signed it.
+    if let Some(s) = store {
+        let _ = s.clear();
+    }
+    Ok(())
+}
+
 /// Blocked pseudonyms, from the persisted address book.
 ///
 /// Kept as a plain `Vec` in the UI because that is what the render path
@@ -2955,13 +3005,16 @@ fn avatar_style(thumb: &[u8]) -> String {
 /// facts first, and they are exactly what a conventional settings screen
 /// buries.
 #[component]
-fn SettingsPanel(onclose: EventHandler<()>) -> Element {
+fn SettingsPanel(node: Node, onclose: EventHandler<()>) -> Element {
     let mut manual = use_signal(|| {
         manual_position().map(|(a, b)| format!("{a}, {b}")).unwrap_or_default()
     });
     let mut loc_msg = use_signal(|| None::<String>);
     let mut pass = use_signal(String::new);
     let mut backup_msg = use_signal(|| None::<String>);
+    // Two taps, not a checkbox: this is the one irreversible control in the
+    // app, and it sits in a list a user may be scrolling.
+    let mut confirm_delete = use_signal(|| false);
     rsx! {
         section { class: "editor",
             header { class: "bar",
@@ -3122,6 +3175,55 @@ fn SettingsPanel(onclose: EventHandler<()>) -> Element {
                             },
                         }
                         "Choose a backup file"
+                    }
+                }
+
+                div { class: "setting",
+                    div { class: "sname", "Delete your account" }
+                    div { class: "sval",
+                        "This marks your profile deleted on the network and wipes "
+                        "everything on this device: your key, profile, photos, "
+                        "messages, favourites and notes."
+                    }
+                    div { class: "sval",
+                        "It cannot un-publish. Tiles already copied to other people's "
+                        "phones stay there until they expire, and anything anyone "
+                        "saved is theirs. Nothing on this network can be recalled — "
+                        "not by us, because there is no us."
+                    }
+                    div { class: "row",
+                        button {
+                            class: if confirm_delete() { "danger" } else { "secondary" },
+                            onclick: {
+                                let node = node.clone();
+                                move |_| {
+                                    if !confirm_delete() {
+                                        confirm_delete.set(true);
+                                        return;
+                                    }
+                                    match delete_account(&node, &me()) {
+                                        Ok(()) => backup_msg.set(Some(
+                                            "Deleted. Close the app; reopening starts a \
+                                             new account."
+                                                .into(),
+                                        )),
+                                        Err(e) => backup_msg.set(Some(e)),
+                                    }
+                                }
+                            },
+                            if confirm_delete() {
+                                "Tap again to delete permanently"
+                            } else {
+                                "Delete account"
+                            }
+                        }
+                        if confirm_delete() {
+                            button {
+                                class: "linkish",
+                                onclick: move |_| confirm_delete.set(false),
+                                "Cancel"
+                            }
+                        }
                     }
                 }
 

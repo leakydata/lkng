@@ -2401,3 +2401,27 @@ The lesson holds in both directions: the audit found the block bug because I
 went looking systematically, and the block bug's test found the persistence
 bug because it round-tripped through the real path instead of asserting on a
 value in memory.
+
+## 2026-08-02 — account deletion
+
+`sign_profile_deletion` existed, was tested, and was called from nowhere —
+while `store-listing.md` carried "account deletion" as an unticked Play
+requirement. Another entry in the same pattern, found by the same audit.
+
+Now wired, and the ordering is the part that matters: **tombstone first, wipe
+second.** Wiping first would destroy the only key able to sign the tombstone,
+leaving the profile permanently live and unowned — an account nobody can
+delete because the person who could is gone.
+
+The tombstone's sequence is set well past the last live one, so a peer
+holding several older bodies cannot replay one over the deletion.
+
+**The copy refuses to say "your data has been deleted."** It says what is
+true: the profile is marked deleted, this device is wiped, and tiles already
+copied to other phones stay there until they expire — anything anyone saved
+is theirs. Nothing on this network can be recalled, *not by us, because there
+is no us*. An app whose entire argument is that it does not lie to its users
+does not get to start at the delete button.
+
+Two taps rather than a confirm dialog, because it is the only irreversible
+control in the app and it lives in a list people scroll.

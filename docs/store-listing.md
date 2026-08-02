@@ -77,10 +77,10 @@ Legal advice is needed here and has not been obtained.
 
 - [ ] Signed release APK with a key held offline
 - [ ] Privacy policy at a stable public URL
-- [ ] Age gate wired into first run (logic done and tested; UI pending)
-- [ ] Reporting flow reachable from every profile and conversation
+- [x] Age gate wired into first run
+- [x] Reporting flow reachable from every profile
 - [ ] Moderation feed subscribed by default
-- [ ] Account deletion: local wipe plus tombstone, with the honest caveat
+- [x] Account deletion: local wipe plus tombstone, with the honest caveat
 - [ ] Screenshots that do not depict real people
 - [ ] Battery and Doze behaviour measured over hours, not minutes
 - [ ] Tested on more than one device
