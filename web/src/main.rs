@@ -754,12 +754,25 @@ fn AgeGate(onpass: EventHandler<()>) -> Element {
 #[component]
 fn App() -> Element {
     let session = use_hook(me);
-    let (cov, fix) = use_hook(|| coverage_for(&me()));
+    // Coverage is a signal, not a one-shot hook.
+    //
+    // It used to be `use_hook(|| coverage_for(&me()))`, computed once at
+    // startup — so setting a location in Settings changed nothing until the
+    // app was killed and reopened, and the Settings copy had to tell people
+    // to do that. A dating app whose location control needs a restart is a
+    // location control that does not work.
+    let mut coverage = use_signal(|| coverage_for(&me()));
+    let (cov, fix) = coverage();
     let node = use_hook(Node::connect);
 
     // Once the socket opens, ask for every cell we watch and subscribe, so
     // later arrivals are pushed rather than polled.
-    let mut requested = use_signal(|| false);
+    // Bumped to re-run the subscription effect. A plain bool meant the app
+    // subscribed once ever: if the node had not yet joined, or the cell was
+    // empty at that instant, the grid stayed empty forever with no way to
+    // ask again.
+    let mut requested = use_signal(|| 0u32);
+    let mut refreshing = use_signal(|| false);
     let granted = use_signal(Vec::<([u8; 32], lkng_album::Grant)>::new);
     {
         let node = node.clone();
@@ -767,7 +780,10 @@ fn App() -> Element {
         let granted = granted.clone();
         use_effect(move || {
             let connected = *node.status.borrow() == Status::Connected;
-            if connected && !requested() {
+            // Re-runs whenever `requested` changes, which a refresh does.
+            let generation = requested();
+            let _ = generation;
+            if connected {
                 for params in cov.watch_set() {
                     let key = Node::key_for(CELL_WASM, &cbor(&params));
                     node.get(key, true);
@@ -784,7 +800,6 @@ fn App() -> Element {
                     let key = Node::key_for(INBOX_WASM, &cbor(&inbox_params_for(&session, epoch)));
                     node.get(key, true);
                 }
-                requested.set(true);
             }
 
             // Fetch any album shared with us. Done here rather than on the
