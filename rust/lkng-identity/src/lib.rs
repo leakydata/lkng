@@ -1056,8 +1056,23 @@ mod reachability_tests {
     #[test]
     fn a_swapped_encryption_key_breaks_the_tile_signature() {
         let id = Identity::from_seed([9u8; 32]);
-        let params = params("9q8yy", 42);
-        let mut rec = blank_record();
+        let params = CellParams {
+            schema_v: 1,
+            cell_id: "9q8yy".into(),
+            epoch: 42,
+        };
+        let mut rec = PresenceRecord {
+            pseudonym: [0; 32],
+            headline: "looking".into(),
+            thumbnail: vec![9; 128],
+            timestamp_ms: 1_785_523_000_000,
+            position: 0,
+            age_band: 0,
+            verifying_key: None,
+            encryption_key: None,
+            writer_cert: None,
+            sig: vec![],
+        };
         id.sign_presence(&mut rec, &params).unwrap();
         let vk = rec.verifying_key.clone().unwrap();
         assert!(verify_presence(&rec, &params, &vk).is_ok());
