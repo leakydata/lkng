@@ -1133,3 +1133,34 @@ because a cold, slow or busy phone beats any constant you would pick.
 The debug frame probe is gone; the Keystore self-test stays as a startup
 assertion, since it turns a silent security regression — keys quietly
 falling back to web storage — into a visible one.
+
+## Real location (2026-08-01)
+
+`Locator.kt` exposes one thing to the UI: a coarse position. The web layer
+no longer holds precise coordinates at any point.
+
+**Why not the WebView's own Geolocation API.** It would hand the page raw
+lat/lon at whatever precision the OS offers. The web layer has no use for
+that — it converts position to a ~5 km cell and discards the rest — so the
+precision would exist purely as something that could leak, through a bug,
+an XSS, or a future careless feature. Asking natively for **coarse only**
+means the grid *cannot* render a distance, because nothing in the app ever
+knows one.
+
+Three deliberate narrowings:
+
+- **`ACCESS_COARSE_LOCATION` only, never `FINE`.** Android fuzzes coarse
+  location to roughly a 1–2 km grid before the app sees it, which composes
+  with our own stable jitter instead of replacing it.
+- **No background location.** Presence is published while the app is open.
+  An app in this category asking to track you when closed would deserve
+  the suspicion it got.
+- **Last-known fix, not a live one.** A fresh fix costs battery and buys
+  precision that is immediately quantised away; a position from minutes
+  ago is indistinguishable after a 5 km cell.
+
+**The fallback is labelled, not disguised.** When there is no position —
+permission refused, or a desktop build with no bridge — the UI shows a
+sample area with a `sample` badge on the cell and says so in the status
+line. Showing someone a grid of people 3,000 km away as though they were
+nearby would be worse than showing nothing.
