@@ -81,6 +81,18 @@ pub struct Inbox {
     pub generation: u64,
 }
 
+/// `PartialEq` so `Node` can be a Dioxus component prop.
+///
+/// Compares by identity, not contents: two handles to the same node are the
+/// same node, and a structural comparison would mean diffing the whole
+/// contract cache on every render to answer a question with one honest
+/// answer.
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inbox, &other.inbox)
+    }
+}
+
 #[derive(Clone)]
 pub struct Node {
     api: Rc<RefCell<Option<WebApi>>>,

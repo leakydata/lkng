@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b84545";
+pub const BUILD_MARKER: &str = "b84980";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -53,6 +53,11 @@ const CELL_WASM: &[u8] = include_bytes!(
 /// carry the code, or the write has nowhere to land.
 const INBOX_WASM: &[u8] = include_bytes!(
     "../../contracts/inbox/target/wasm32-unknown-unknown/release/inbox_contract.wasm"
+);
+
+/// Compiled profile contract.
+const PROFILE_WASM: &[u8] = include_bytes!(
+    "../../contracts/profile/target/wasm32-unknown-unknown/release/profile_contract.wasm"
 );
 
 /// Compiled moderation-feed contract.
@@ -1071,7 +1076,11 @@ fn App() -> Element {
         }
 
         if tab() == Tab::Profile {
-            ProfileEditor { draft: draft, onclose: move |_| tab.set(Tab::Browse) }
+            ProfileEditor {
+                draft: draft,
+                node: node.clone(),
+                onclose: move |_| tab.set(Tab::Browse),
+            }
         }
         if tab() == Tab::Settings {
             SettingsPanel { onclose: move |_| tab.set(Tab::Browse) }
@@ -1369,7 +1378,17 @@ fn App() -> Element {
                     TileCard {
                         key: "{hex(&tile.pseudonym)}",
                         tile: tile.clone(),
-                        onopen: move |t| selected.set(Some(t)),
+                        onopen: {
+                            let node = node.clone();
+                            move |t: Tile| {
+                                // Asked for on open rather than for every
+                                // tile in the grid: fetching 500 profiles to
+                                // render nine thumbnails would be the app
+                                // treating the network as free.
+                                request_profile_for(&node, &t);
+                                selected.set(Some(t));
+                            }
+                        },
                     }
                 }
             }
@@ -1390,8 +1409,35 @@ fn App() -> Element {
         if let Some(t) = selected() {
             div { class: "sheet-backdrop", onclick: move |_| selected.set(None),
                 div { class: "sheet", onclick: move |e| e.stop_propagation(),
-                    div { class: "sheet-thumb", style: "{tile_art(&t)}" }
-                    h2 { "{t.headline}" }
+                    {
+                        let profile = fetch_profile_for(&node, &t);
+                        rsx! {
+                            div { class: "sheet-thumb", style: "{tile_art(&t)}" }
+                            if let Some(p) = profile.as_ref() {
+                                if !p.photos.is_empty() {
+                                    div { class: "photo-row",
+                                        for (i, ph) in p.photos.iter().enumerate() {
+                                            div {
+                                                key: "vp-{i}",
+                                                class: "photo-cell",
+                                                style: "background-image:url(data:image/webp;base64,{b64(&ph.bytes)})",
+                                            }
+                                        }
+                                    }
+                                }
+                                if !p.display_name.is_empty() {
+                                    h2 { "{p.display_name}" }
+                                }
+                                if !p.bio.is_empty() {
+                                    p { class: "meta", "{p.bio}" }
+                                }
+                                if let Some(age) = p.demographics.age {
+                                    p { class: "meta", "{age}" }
+                                }
+                            }
+                            h2 { "{t.headline}" }
+                        }
+                    }
                     p { class: "meta",
                         if t.same_cell { "In your area" } else { "Next area over" }
                     }
@@ -2040,6 +2086,126 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
+/// Fetch someone's profile, given the verifying key from their tile.
+///
+/// # Why a tile is enough, and what that does and does not reveal
+///
+/// A profile's address derives from its owner's durable verifying key, and a
+/// tile carries an *epoch* key — so a tile does not lead to a profile. What
+/// the tile does carry is enough to derive the address of a profile
+/// published **under that epoch key**, which is what this app does: the
+/// profile a stranger can find is the one you published this epoch, and it
+/// stops being findable when the epoch turns over.
+///
+/// That is a deliberate limitation rather than an oversight. A durable
+/// profile address reachable from a public tile would make the tile a
+/// permanent handle, which is the exact linkability the epoch design exists
+/// to prevent.
+fn fetch_profile_for(node: &Node, tile: &Tile) -> Option<lkng_profile::ProfileBody> {
+    let vk = tile.verifying_key.as_ref()?;
+    let params = lkng_profile::ProfileParams::new(vk);
+    let key = Node::key_for(PROFILE_WASM, &cbor(&params));
+    let bytes = node.state_of(key.id())?;
+    let state: lkng_profile::ProfileState = ciborium::de::from_reader(&bytes[..]).ok()?;
+    // Verified before anything is rendered: an unverified profile is
+    // whatever the last writer put at that address.
+    lkng_identity::verify_profile(&state, &params).ok()?;
+    state.body
+}
+
+/// Ask the node for a tile's profile, so it is in hand when opened.
+fn request_profile_for(node: &Node, tile: &Tile) {
+    if let Some(vk) = tile.verifying_key.as_ref() {
+        let params = lkng_profile::ProfileParams::new(vk);
+        let key = Node::key_for(PROFILE_WASM, &cbor(&params));
+        node.get(key, false);
+    }
+}
+
+/// Storage key for the profile sequence number.
+const PROFILE_SEQ_KEY: &str = "lkng.profile.seq.v1";
+
+/// Publish the profile so other people can actually see it.
+///
+/// # Why this exists as its own step
+///
+/// Until now the editor only wrote a draft to device storage. A tile carries
+/// a headline and a 16 KiB thumbnail; everything else a person filled in —
+/// bio, photos, age, position — went nowhere. Someone could complete a
+/// profile, see it rendered back to them, and be the only person alive who
+/// could ever read it.
+///
+/// # Why the sequence number is stored rather than derived
+///
+/// A profile update wins on a higher sequence. Deriving it from a clock
+/// would make two devices with skewed clocks fight, and each publish would
+/// have to beat the last one by luck. A stored counter is monotonic per
+/// device, which is what the contract actually needs.
+fn publish_profile(node: &Node, session: &Session, draft: &Draft) -> Result<(), String> {
+    let store = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+    let seq = store
+        .as_ref()
+        .and_then(|s| s.get_item(PROFILE_SEQ_KEY).ok().flatten())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+
+    let primary = draft.primary.min(draft.photos.len().saturating_sub(1));
+    let photos: Vec<lkng_profile::PhotoRef> = draft
+        .photos
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| lkng_profile::PhotoRef::new(bytes.clone(), i == primary))
+        .collect();
+
+    let body = lkng_profile::ProfileBody {
+        display_name: draft.display_name.trim().to_string(),
+        bio: draft.bio.trim().to_string(),
+        tags: Vec::new(),
+        photos,
+        thumbnail: draft.thumbnail.clone(),
+        demographics: lkng_profile::Demographics {
+            age: draft.age.parse::<u8>().ok(),
+            position: position_from_code(draft.position),
+            ..Default::default()
+        },
+        // Filled in by sign_profile, which always sets it -- a forgotten
+        // encryption key makes an identity silently unmessageable.
+        encryption_key: None,
+        sequence: seq,
+    };
+
+    let state = session
+        .identity()
+        .sign_profile(body)
+        .map_err(|e| e.to_string())?;
+
+    let params = session.identity().profile_params();
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(PROFILE_WASM, &params_bytes);
+    node.seed_once(PROFILE_WASM, &params_bytes, cbor(&state));
+    node.update(key, cbor(&state));
+
+    if let Some(s) = store {
+        let _ = s.set_item(PROFILE_SEQ_KEY, &seq.to_string());
+    }
+    Ok(())
+}
+
+/// Map the draft's numeric position back to the profile enum.
+fn position_from_code(code: u8) -> Option<lkng_profile::Position> {
+    use lkng_profile::Position::*;
+    match code {
+        1 => Some(Top),
+        2 => Some(VerseTop),
+        3 => Some(Versatile),
+        4 => Some(VerseBottom),
+        5 => Some(Bottom),
+        6 => Some(Side),
+        _ => None,
+    }
+}
+
 /// Watch for a newer UI build and reload when one lands.
 ///
 /// # Why this is needed
@@ -2220,7 +2386,7 @@ fn hex(bytes: &[u8; 32]) -> String {
 /// app like this is a field people lie in, and a lie in a profile is worse
 /// than a blank.
 #[component]
-fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
+fn ProfileEditor(draft: Signal<Draft>, node: Node, onclose: EventHandler<()>) -> Element {
     let mut status = use_signal(String::new);
     let mut busy = use_signal(|| false);
 
@@ -2303,7 +2469,26 @@ fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
         section { class: "editor",
             header { class: "bar",
                 div { class: "brand", "Your profile" }
-                button { class: "linkish", onclick: move |_| onclose.call(()), "Done" }
+                button {
+                    class: "linkish",
+                    onclick: {
+                        let node = node.clone();
+                        move |_| {
+                            let d = draft.read().clone();
+                            save_draft(&d);
+                            // Publish on Done, not on every keystroke: each
+                            // publish is a full contract state pushed to
+                            // peers, and a profile saved per-character would
+                            // be hundreds of writes for one edit.
+                            match publish_profile(&node, &me(), &d) {
+                                Ok(()) => status.set("saved and published".into()),
+                                Err(e) => status.set(format!("saved on this device, but not published: {e}")),
+                            }
+                            onclose.call(());
+                        }
+                    },
+                    "Done"
+                }
             }
 
             div { class: "form",

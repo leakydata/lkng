@@ -2257,3 +2257,36 @@ The app now re-fetches its own page every ten minutes and reloads if the
 content-hashed asset names have changed. It reloads rather than prompting:
 the draft, messages and identity are all in storage, so a prompt buys
 nothing except the chance to decline a fix.
+
+## 2026-08-02 — profiles were never published either
+
+Same shape as presence, found the same way — by asking what a feature does
+end to end rather than whether its pieces exist.
+
+The profile editor wrote a draft to device storage and **made no network
+write at all**. A tile carried a headline and a 16 KiB thumbnail; bio,
+photos, age and position went nowhere. Someone could fill in a profile, see
+it rendered back, and be the only person alive able to read it. The multiple
+photos added an hour earlier were, until now, a private slideshow.
+
+`publish_profile` signs the body with the durable key and writes it via the
+same seed-then-update the other contracts use. Sequence numbers come from a
+stored counter rather than a clock: two devices with skewed clocks would
+otherwise fight, and each publish would have to beat the last by luck.
+
+Publishing happens on **Done**, not per keystroke. Each publish is a full
+contract state pushed to peers, and a profile saved per-character would be
+hundreds of writes for one edit.
+
+**What a stranger can actually reach, stated precisely.** A profile's address
+derives from a verifying key, and a tile carries an *epoch* key — so the
+profile reachable from a tile is the one published under that epoch key, and
+it stops being findable when the epoch turns. That is a deliberate limit, not
+an oversight: a durable profile address reachable from a public tile would
+make the tile a permanent handle, which is the exact linkability the epoch
+design exists to prevent.
+
+Profiles are fetched when a tile is opened, not for every tile in the grid —
+fetching 500 profiles to render nine thumbnails would be the app treating the
+network as free — and verified before anything is rendered, since an
+unverified profile is whatever the last writer put at that address.
