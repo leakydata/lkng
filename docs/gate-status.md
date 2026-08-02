@@ -1329,3 +1329,39 @@ cell state. That assertion is the one guarding the property that would
 otherwise fail *silently*: if someone later "simplified" the tile's
 encryption key to a durable one, messaging would keep working perfectly and
 every user would quietly become trackable across every epoch and area.
+
+## 2026-08-01 — the app was never in its own grid
+
+Found while looking for something else: `compose_tile` appeared **only** in
+`demo_tiles`. The app subscribed to cells, verified tiles, rendered a grid,
+and never published the user's own. Every install was a spectator — invisible
+to everyone, and unmessageable, because a tile is what advertises the
+encryption key a stranger needs.
+
+This is worth recording because of *how* it hid. Every visible surface
+worked: the grid filled, tiles verified, the network round-tripped. All the
+evidence pointed at a working app, because everything that produced evidence
+was the read path. The write path had no symptom at all — an app that
+publishes nothing looks exactly like an app in an empty neighbourhood.
+
+**Publishing is gated on three conditions**, and the middle one is the one
+that would have been easy to get wrong:
+
+1. the user has written a headline — otherwise the app puts someone in a
+   public grid before they have decided to be there;
+2. there is a **real device fix**. Publishing against the sample location
+   would drop the user into a cell on the other side of the world, visible
+   to strangers, having never left their house. In development the sample
+   area looks like it works, which is exactly why this needs to be a
+   condition rather than a habit;
+3. the node is connected.
+
+Re-published every four minutes, because cells cap at the newest N records
+(a stale tile is evicted by new arrivals) and cells are per-epoch contracts
+(at a rollover the tile must be written into a *different* contract or the
+user silently vanishes). Four minutes and not four seconds: every publish is
+bytes that every phone in the cell downloads.
+
+The UI now states plainly whether you are visible and, if not, why. The
+condition is computed once and shared with the publisher, so the app cannot
+claim a visibility it has not acted on.
