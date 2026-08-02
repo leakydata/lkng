@@ -572,3 +572,197 @@ fn swatch(pseudonym: &[u8; 32]) -> String {
 fn hex(bytes: &[u8; 32]) -> String {
     bytes[..6].iter().map(|b| format!("{b:02x}")).collect()
 }
+
+/// Profile editor.
+///
+/// Everything here is optional except the age gate. A required field in an
+/// app like this is a field people lie in, and a lie in a profile is worse
+/// than a blank.
+#[component]
+fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
+    let mut status = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+
+    let pick_photo = move |evt: Event<FormData>| {
+        let files = evt.files();
+        spawn(async move {
+            let Some(first) = files.into_iter().next() else { return };
+            let bytes = first.contents().to_vec();
+            if bytes.is_empty() {
+                status.set("could not read that file".into());
+                return;
+            }
+            busy.set(true);
+            status.set("processing…".into());
+
+            let arr = js_sys::Uint8Array::from(&bytes[..]);
+            let parts = js_sys::Array::of1(&arr.buffer());
+            match web_sys::Blob::new_with_u8_array_sequence(&parts) {
+                Ok(blob) => match photo::to_thumbnail(&blob).await {
+                    Ok(thumb) => {
+                        let n = thumb.len();
+                        draft.write().thumbnail = thumb;
+                        save_draft(&draft.read());
+                        status.set(format!("photo ready ({n} bytes, location data removed)"));
+                    }
+                    Err(e) => status.set(e.to_string()),
+                },
+                Err(_) => status.set("could not read that image".into()),
+            }
+            busy.set(false);
+        });
+    };
+
+    let save = move |_| {
+        let d = draft.read().clone();
+        // The one hard rule. 18+ is a legal obligation in every
+        // jurisdiction this could ship in, and unlike the rest it cannot
+        // be left blank.
+        match d.age.parse::<u8>() {
+            Ok(a) if (18..=120).contains(&a) => {}
+            _ => {
+                status.set("please enter your age (18 or over)".into());
+                return;
+            }
+        }
+        if d.display_name.trim().is_empty() {
+            status.set("please choose a name to show".into());
+            return;
+        }
+        save_draft(&d);
+        status.set("saved to this device — publishing lands with the next build".into());
+    };
+
+    let thumb_style = {
+        let d = draft.read();
+        if d.thumbnail.is_empty() {
+            "background: linear-gradient(135deg,#2a2d36,#181a20)".to_string()
+        } else {
+            format!("background-image:url(data:image/webp;base64,{})", b64(&d.thumbnail))
+        }
+    };
+
+    rsx! {
+        section { class: "editor",
+            header { class: "bar",
+                div { class: "brand", "Your profile" }
+                button { class: "linkish", onclick: move |_| onclose.call(()), "Done" }
+            }
+
+            div { class: "form",
+                label { class: "photo-pick", style: "{thumb_style}",
+                    input {
+                        r#type: "file",
+                        accept: "image/*",
+                        onchange: pick_photo,
+                    }
+                    if draft.read().thumbnail.is_empty() {
+                        span { "Add a photo" }
+                    }
+                }
+                p { class: "hint",
+                    "Your photo is resized on this device and its location data is removed "
+                    "before it is ever published. It will be visible to anyone nearby."
+                }
+
+                Field { label: "Name shown", value: draft.read().display_name.clone(),
+                    oninput: move |v| { draft.write().display_name = v; } }
+                Field { label: "Headline", value: draft.read().headline.clone(),
+                    oninput: move |v| { draft.write().headline = v; } }
+                Field { label: "Age", value: draft.read().age.clone(),
+                    oninput: move |v| { draft.write().age = v; } }
+                Field { label: "Gender", value: draft.read().gender.clone(),
+                    oninput: move |v| { draft.write().gender = v; } }
+
+                div { class: "field",
+                    span { class: "flabel", "Position" }
+                    div { class: "chips",
+                        for (code, name) in [
+                            (1u8, "Top"), (2, "Vers Top"), (3, "Versatile"),
+                            (4, "Vers Bottom"), (5, "Bottom"), (6, "Side"),
+                        ] {
+                            button {
+                                class: if draft.read().position == code { "chip on" } else { "chip" },
+                                onclick: move |_| {
+                                    let cur = draft.read().position;
+                                    draft.write().position = if cur == code { 0 } else { code };
+                                },
+                                "{name}"
+                            }
+                        }
+                    }
+                }
+
+                div { class: "field",
+                    span { class: "flabel", "Status" }
+                    div { class: "chips",
+                        for name in ["Negative", "Negative, on PrEP", "Positive", "Positive, undetectable"] {
+                            button {
+                                class: if draft.read().hiv_status == name { "chip on" } else { "chip" },
+                                onclick: move |_| {
+                                    let cur = draft.read().hiv_status.clone();
+                                    draft.write().hiv_status =
+                                        if cur == name { String::new() } else { name.to_string() };
+                                },
+                                "{name}"
+                            }
+                        }
+                    }
+                    p { class: "hint",
+                        "Health information stays in your profile and is never put on the "
+                        "public grid. Only people you share your profile with can see it."
+                    }
+                }
+
+                div { class: "field",
+                    span { class: "flabel", "About you" }
+                    textarea {
+                        rows: 4,
+                        value: "{draft.read().bio}",
+                        oninput: move |e| { draft.write().bio = e.value(); },
+                    }
+                }
+
+                if !status().is_empty() {
+                    p { class: "status", "{status}" }
+                }
+
+                button {
+                    class: "primary wide",
+                    disabled: busy(),
+                    onclick: save,
+                    if busy() { "Working…" } else { "Save" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn Field(label: String, value: String, oninput: EventHandler<String>) -> Element {
+    rsx! {
+        div { class: "field",
+            span { class: "flabel", "{label}" }
+            input {
+                r#type: "text",
+                value: "{value}",
+                oninput: move |e| oninput.call(e.value()),
+            }
+        }
+    }
+}
+
+fn b64(b: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in b.chunks(3) {
+        let n = ((c[0] as u32) << 16)
+            | ((*c.get(1).unwrap_or(&0) as u32) << 8)
+            | (*c.get(2).unwrap_or(&0) as u32);
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
