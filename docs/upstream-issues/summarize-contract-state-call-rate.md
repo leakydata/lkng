@@ -69,6 +69,28 @@ By comparison, over the same period: `peer_connection` 632 log events,
   connected during measurement.
 - **Client activity** — none. No WebSocket connection existed.
 
+## A desktop comparison, which complicates the story
+
+The same node software on x86_64 (Xeon E5-2630 v4, 2.2–3.1 GHz), same
+network, uses **18.5% of one core** — measured over 60 s, 4h20m uptime.
+
+So the node is probably doing a roughly *constant* amount of background
+work, and the difference is core throughput: ~18% of a desktop core and
+~50% of a phone core (2.02 GHz little core, far lower IPC). That is a
+meaningfully weaker claim than "phone-specific bug", and it is the honest
+reading of the two numbers.
+
+It does not make the problem go away. A constant background cost that
+consumes half a phone core is still the thing that decides whether a node
+can live on a phone, and the phone is where the constraint bites. But a
+maintainer should know that this looks like *the node's normal idle cost
+measured on weaker hardware*, not a mobile-only defect.
+
+The desktop figures are otherwise not representative of a user: that node
+carries 1.2 GB RSS and 7 leaked client WebSocket connections after an
+evening of development, which is a dev artefact rather than something a
+user's node would accumulate.
+
 ## Questions
 
 1. Is ~89 calls/s/node the intended summarisation cadence on an idle node

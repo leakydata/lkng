@@ -1982,3 +1982,22 @@ which is the first thing a maintainer would ask for and which we have not
 built.
 
 Still not filed, for that reason.
+
+**A desktop comparison, which weakens the story and is worth saying anyway.**
+The same node on x86_64 (Xeon E5-2630 v4) uses **18.5% of one core**, not
+50%. So the node is likely doing a roughly constant amount of background
+work, and the difference is core throughput — a 2.02 GHz phone core with far
+lower IPC versus a desktop Xeon.
+
+That is a materially weaker claim than "phone-specific bug", and the upstream
+draft now says so in those words. The problem does not disappear: a constant
+background cost that eats half a phone core still decides whether a node can
+live on a phone. But it looks like the node's ordinary idle cost measured on
+weaker hardware, not a mobile-only defect, and a maintainer should be told
+that rather than left to discover it.
+
+Also spotted: the desktop node holds **7 leaked client WebSocket
+connections** and 1.2 GB RSS after an evening of `fdev` invocations. That is
+a development artefact — a user's node has one client — but it is the same
+shape as the self-inflicted DoS fixed earlier with `Demux::close()`, this
+time from tooling rather than our examples. Noted, not chased tonight.
