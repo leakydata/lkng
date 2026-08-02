@@ -437,6 +437,12 @@ fn App() -> Element {
                     let key = Node::key_for(CELL_WASM, &cbor(&params));
                     node.get(key, true);
                 }
+                // Subscribe to our own inbox too, so a message that arrives
+                // while the app is open lands without a poll. Requested with
+                // the same call the grid uses; there is nothing special about
+                // an inbox from the node's point of view.
+                let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params()));
+                node.get(key, true);
                 requested.set(true);
             }
         });
