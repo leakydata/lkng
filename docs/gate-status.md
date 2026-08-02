@@ -1932,3 +1932,28 @@ problem with LKNG on a phone, and the README says so in those terms.
 
 It also means the `summarize_state` optimisation, while correct, was not the
 bottleneck. The call rate is upstream's and the draft issue stands.
+
+## 2026-08-02 — halving the subscription count
+
+With the CPU baseline established at ~50% of a core and the call rate
+upstream's to fix, the lever we actually control is **how many contracts the
+phone hosts at all**. Each subscription is summarised continuously.
+
+`watch_set` was 9 cells × 2 epochs = **18 presence subscriptions**. Now 10.
+
+The cut is chosen by what a subscription is worth, not just what it costs:
+
+| | kept | why |
+| --- | --- | --- |
+| home, current | yes | the main event |
+| neighbours, current | yes | someone a metre across a boundary is as nearby as anyone in your own cell |
+| home, previous | yes | or the grid empties every six hours at rollover |
+| neighbours, previous | **no** | stale *and* further away — the least valuable thing in the grid |
+
+Three tests hold each half of that, and the pre-existing test asserting 18
+was updated rather than deleted, with the reasoning in place so the number
+is not silently "corrected" back later.
+
+Whether this moves the measured CPU is not yet known — the phone has to pick
+up the new contract first, and saying it will would be exactly the mistake
+made about `summarize_state` an hour ago.

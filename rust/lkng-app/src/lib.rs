@@ -97,16 +97,48 @@ pub struct Coverage {
 
 impl Coverage {
     /// Every `(cell, epoch)` pair to subscribe to — the full watch set.
+    /// Every `(cell, epoch)` pair to subscribe to.
+    ///
+    /// # Why this is not simply every cell × every epoch
+    ///
+    /// The obvious version — 9 cells × 2 epochs — is 18 contract
+    /// subscriptions, and each one costs the phone continuously: the node
+    /// summarises every hosted contract repeatedly (measured at ~89 calls
+    /// per second in aggregate on an idle device, which is most of a
+    /// sustained ~50% of one CPU core).
+    ///
+    /// So the previous epoch is watched **for the home cell only**. The
+    /// reasoning is about what those subscriptions are worth, not just what
+    /// they cost:
+    ///
+    /// * *home, current* — the main event;
+    /// * *neighbours, current* — people just across a cell boundary, who are
+    ///   as nearby as anyone in your own cell; worth every byte;
+    /// * *home, previous* — needed, or the grid empties every six hours at
+    ///   rollover while everyone re-publishes;
+    /// * *neighbours, previous* — **dropped.** A tile that is both in
+    ///   another cell and from a past epoch is the least valuable thing in
+    ///   the grid: stale *and* further away. Paying a continuous CPU cost on
+    ///   someone's phone for it is the wrong trade.
+    ///
+    /// 18 subscriptions down to 10.
     pub fn watch_set(&self) -> Vec<CellParams> {
-        let mut out = Vec::with_capacity(self.cells.len() * 2);
+        let mut out = Vec::with_capacity(self.cells.len() + 1);
+        let home = self.home.as_str();
         for c in &self.cells {
-            for e in self.epochs {
-                out.push(CellParams {
-                    schema_v: SCHEMA_V,
-                    cell_id: c.as_str().to_string(),
-                    epoch: e,
-                });
-            }
+            out.push(CellParams {
+                schema_v: SCHEMA_V,
+                cell_id: c.as_str().to_string(),
+                epoch: self.epochs[0],
+            });
+        }
+        // Previous epoch, home cell only.
+        if self.epochs[1] != self.epochs[0] {
+            out.push(CellParams {
+                schema_v: SCHEMA_V,
+                cell_id: home.to_string(),
+                epoch: self.epochs[1],
+            });
         }
         out
     }
@@ -486,11 +518,15 @@ mod tests {
     }
 
     #[test]
-    fn coverage_watches_nine_cells_and_two_epochs() {
+    fn coverage_watches_nine_cells_and_the_previous_home_epoch() {
         let s = session(1);
         let c = s.coverage(SF.0, SF.1, NOW).unwrap();
         assert_eq!(c.cells.len(), 9, "home plus eight neighbours");
-        assert_eq!(c.watch_set().len(), 18, "each cell in two epochs");
+        // Was 18 (every cell in both epochs) until 2026-08-02. Each
+        // subscription is a contract the phone summarises continuously, and
+        // a tile that is both from a neighbouring cell and a past epoch is
+        // stale and further away — the least valuable thing in the grid.
+        assert_eq!(c.watch_set().len(), 10, "9 current-epoch cells + home's previous");
         assert_eq!(c.epochs[1], c.epochs[0] - 1, "previous epoch is watched too");
         assert_eq!(c.publish_target().cell_id, c.home.as_str());
     }
@@ -1327,5 +1363,66 @@ mod age_tests {
         assert_eq!(check_age((2000, 13, 1), (2026, 8, 1)), AgeCheck::Invalid);
         assert_eq!(check_age((2000, 1, 0), (2026, 8, 1)), AgeCheck::Invalid);
         assert_eq!(check_age((1600, 1, 1), (2026, 8, 1)), AgeCheck::Invalid);
+    }
+}
+
+#[cfg(test)]
+mod watch_set_tests {
+    use super::*;
+
+    fn coverage() -> Coverage {
+        let s = Session::new(Identity::from_seed([4; 32]), [4; 32], Privacy::Km1);
+        s.coverage(51.5074, -0.1278, 1_785_640_000).unwrap()
+    }
+
+    /// The home cell must be watched in both epochs, or the grid empties at
+    /// every six-hourly rollover while everyone re-publishes.
+    #[test]
+    fn home_is_watched_in_both_epochs() {
+        let cov = coverage();
+        let set = cov.watch_set();
+        let home = cov.home.as_str();
+        for e in cov.epochs {
+            assert!(
+                set.iter().any(|p| p.cell_id == home && p.epoch == e),
+                "home cell must be watched in epoch {e}"
+            );
+        }
+    }
+
+    /// Every neighbour is watched in the current epoch: someone one metre
+    /// across a cell boundary is as nearby as anyone in your own cell.
+    #[test]
+    fn all_neighbours_are_watched_in_the_current_epoch() {
+        let cov = coverage();
+        let set = cov.watch_set();
+        for c in &cov.cells {
+            assert!(
+                set.iter().any(|p| p.cell_id == c.as_str() && p.epoch == cov.epochs[0]),
+                "neighbour {} must be watched in the current epoch",
+                c.as_str()
+            );
+        }
+    }
+
+    /// The costly combination is dropped.
+    ///
+    /// Each subscription is continuous CPU on a phone. A tile both in
+    /// another cell and from a past epoch is stale *and* further away —
+    /// the least valuable thing in the grid, and not worth that.
+    #[test]
+    fn neighbours_are_not_watched_in_the_previous_epoch() {
+        let cov = coverage();
+        let set = cov.watch_set();
+        let home = cov.home.as_str();
+        for p in &set {
+            if p.epoch == cov.epochs[1] && cov.epochs[1] != cov.epochs[0] {
+                assert_eq!(
+                    p.cell_id, home,
+                    "only the home cell may be watched in the previous epoch"
+                );
+            }
+        }
+        assert_eq!(set.len(), cov.cells.len() + 1, "9 neighbours + 1 previous-epoch home");
     }
 }

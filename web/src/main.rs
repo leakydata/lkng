@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b42254";
+pub const BUILD_MARKER: &str = "b45941";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
