@@ -434,3 +434,5 @@ button.wide { width: 100%; padding: 13px; border-radius: 12px; margin-bottom: 12
   aspect-ratio: 1; border-radius: 8px;
   background: #1b1d24; background-size: cover; background-position: center;
 }
+
+.shared-head { display: flex; align-items: center; gap: 12px; margin: 18px 0 8px; }

@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b36395";
+pub const BUILD_MARKER: &str = "b36712";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -723,9 +723,11 @@ fn App() -> Element {
     // Once the socket opens, ask for every cell we watch and subscribe, so
     // later arrivals are pushed rather than polled.
     let mut requested = use_signal(|| false);
+    let granted = use_signal(Vec::<([u8; 32], lkng_album::Grant)>::new);
     {
         let node = node.clone();
         let cov = cov.clone();
+        let granted = granted.clone();
         use_effect(move || {
             let connected = *node.status.borrow() == Status::Connected;
             if connected && !requested() {
@@ -746,6 +748,19 @@ fn App() -> Element {
                     node.get(key, true);
                 }
                 requested.set(true);
+            }
+
+            // Fetch any album shared with us. Done here rather than on the
+            // Albums tab so the photos are already in hand when the user
+            // opens it -- a shared album that shows a spinner the first time
+            // reads as broken.
+            for (_, grant) in granted.read().iter() {
+                let params = lkng_album::AlbumParams {
+                    schema_v: SCHEMA_V,
+                    address: grant.address,
+                };
+                let key = Node::key_for(ALBUM_WASM, &cbor(&params));
+                node.get(key, true);
             }
         });
     }
@@ -874,6 +889,39 @@ fn App() -> Element {
         // here — see the module docs on why there is no "sent" contract.
         chat::with_sent(network, &sent_log(), &visible)
     };
+
+    // Albums other people have shared with us, from the same inbox states
+    // the messages came from.
+    let received_grants: Vec<([u8; 32], lkng_album::Grant)> = {
+        let mut all = Vec::new();
+        for epoch in cov.epochs {
+            let key = Node::key_for(INBOX_WASM, &cbor(&inbox_params_for(&session, epoch)));
+            if let Some(state) = node.state_of(key.id()) {
+                all.extend(chat::grants_from_inbox(session.identity(), &state));
+            }
+        }
+        // Newest grant per person: a re-share after a revocation supersedes
+        // the old one, and offering both would hand the user a key that no
+        // longer opens anything.
+        let mut best: std::collections::BTreeMap<[u8; 32], lkng_album::Grant> = Default::default();
+        for (from, g) in all {
+            match best.get(&from) {
+                Some(existing) if existing.generation >= g.generation => {}
+                _ => {
+                    best.insert(from, g);
+                }
+            }
+        }
+        best.into_iter().collect()
+    };
+    {
+        // Feed the signal the fetch-effect reads. Compared first, so an
+        // unchanged list cannot drive a re-render loop.
+        let mut g = granted;
+        if *g.peek() != received_grants {
+            g.set(received_grants.clone());
+        }
+    }
 
     // A thread with nothing but taps belongs on the Taps screen, not in
     // Messages: it is a signal, not a conversation, and mixing them makes
@@ -1127,6 +1175,69 @@ fn App() -> Element {
                             key: "ap-{i}",
                             class: "album-cell",
                             style: "{album_art(p)}",
+                        }
+                    }
+                }
+
+                if !received_grants.is_empty() {
+                    h2 { class: "screen-h", "Shared with you" }
+                    for (from, grant) in received_grants.iter().cloned() {
+                        {
+                            let params = lkng_album::AlbumParams {
+                                schema_v: SCHEMA_V,
+                                address: grant.address,
+                            };
+                            let key = Node::key_for(ALBUM_WASM, &cbor(&params));
+                            let theirs: Option<lkng_album::AlbumState> = node
+                                .state_of(key.id())
+                                .and_then(|b| ciborium::de::from_reader(&b[..]).ok());
+                            // Verified before anything is drawn. A grant names
+                            // an address; without checking the album there is
+                            // signed by the key in the grant, a grant would be
+                            // an instruction to fetch and display a stranger's
+                            // contract.
+                            let ok = theirs
+                                .as_ref()
+                                .map(|a| lkng_album::verify::verify_album(a, &params).is_ok())
+                                .unwrap_or(false);
+                            let gk: [u8; 32] = grant.key[..].try_into().unwrap_or([0; 32]);
+                            rsx! {
+                                div { class: "shared-head",
+                                    div { class: "thumb sm", style: "{peer_art(&from, &visible)}" }
+                                    div { class: "thread-txt",
+                                        div { class: "thread-name",
+                                            {visible.iter().find(|t| t.pseudonym == from)
+                                                .map(|t| t.headline.clone())
+                                                .unwrap_or_else(|| "Someone nearby".into())}
+                                        }
+                                        div { class: "thread-last",
+                                            if !ok {
+                                                "not available"
+                                            } else {
+                                                "shared their album"
+                                            }
+                                        }
+                                    }
+                                }
+                                if let (true, Some(album)) = (ok, theirs.as_ref()) {
+                                    div { class: "album-grid",
+                                        for (i, p) in album.readable_at(grant.generation)
+                                            .iter().enumerate() {
+                                            div {
+                                                key: "sh-{i}",
+                                                class: "album-cell",
+                                                style: "{shared_art(&gk, p)}",
+                                            }
+                                        }
+                                    }
+                                    if album.readable_at(grant.generation).is_empty() {
+                                        p { class: "hint",
+                                            "Nothing here you can open. They may have "
+                                            "changed who the album is shared with."
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1739,6 +1850,23 @@ fn album_art(photo: &lkng_album::EncryptedPhoto) -> String {
         // A photo we cannot open is one encrypted under a key this device no
         // longer has -- shown as a blank rather than hidden, so the count
         // stays honest.
+        Err(_) => "background:#1b1d24".to_string(),
+    }
+}
+
+/// Background for a photo in someone else's album, under their grant key.
+///
+/// A photo that will not open is drawn as a blank rather than skipped. It
+/// means the owner rotated the key — the honest rendering of "there is
+/// something here you are no longer meant to see" is an empty frame, not a
+/// silently shorter grid that hides the fact anything changed.
+fn shared_art(key: &[u8; 32], photo: &lkng_album::EncryptedPhoto) -> String {
+    match Identity::open_album_photo(key, photo) {
+        Ok(bytes) => format!(
+            "background-image:url(data:image/webp;base64,{});background-size:cover;\
+             background-position:center",
+            b64(&bytes)
+        ),
         Err(_) => "background:#1b1d24".to_string(),
     }
 }

@@ -1629,3 +1629,37 @@ cannot read the new one.
 
 That last line is the design stated as an observation rather than a promise.
 The bytes they already had are theirs, and no contract can take them back.
+
+## 2026-08-01 — receiving album grants, and a near miss
+
+Albums could be shared but not received. The UI now collects grants from the
+same inbox states messages come from, fetches each granted album, verifies
+it, and renders what the grant's generation permits.
+
+**The near miss.** A grant's payload begins with the ASCII bytes of its
+domain tag, not with one of this module's marker bytes — so before the fix
+it fell through to the legacy plain-text branch and would have rendered *a
+private key* as a wall of mojibake inside a conversation. Recognisable to a
+user only as a bug; recognisable to anyone reading over their shoulder as
+something else. `decode_payload` now checks for a grant first, and
+`encode_payload` deliberately cannot produce one: grants are built by
+`lkng-album`, which owns their format, so a caller cannot synthesise a
+keyless grant whose failure would land on the recipient.
+
+Two rendering decisions that are about honesty rather than polish:
+
+- **A granted album is verified before anything is drawn.** A grant names an
+  address; without checking that the album there is signed by the key named
+  in the grant, a grant is an instruction to fetch and display a stranger's
+  contract.
+- **A photo that will not open is drawn as an empty frame, not skipped.**
+  It means the owner rotated the key. A silently shorter grid would hide
+  that anything had changed; an empty frame says "there is something here
+  you are no longer meant to see", which is the truth.
+
+Also worth recording: the first attempt at this patch silently did nothing.
+The anchor text it matched on had been rewritten earlier in the session, so
+the replacement applied zero times and the build stayed green. Caught by
+grepping for the new identifier rather than trusting "no errors" — the same
+class of failure as the stale bundle, at a smaller scale, and the same fix:
+check the artifact, not the report.

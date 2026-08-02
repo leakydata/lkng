@@ -43,6 +43,13 @@ use lkng_inbox::{Envelope, InboxParams, InboxState};
 pub enum Kind {
     Text,
     Tap,
+    /// An album key, shared with us.
+    ///
+    /// Recognised **before** the legacy plain-text branch. A grant's encoding
+    /// begins with the ASCII bytes of its domain tag, so without this it
+    /// would decode as text and render as a wall of mojibake in a
+    /// conversation — a private key, drawn on screen, looking like a bug.
+    AlbumGrant,
 }
 
 /// First byte of a sealed payload, naming what follows.
@@ -55,11 +62,17 @@ const MARK_TEXT: u8 = 0x01;
 const MARK_TAP: u8 = 0x02;
 
 /// Encode a payload for sealing.
+///
+/// Album grants are **not** encodable here: they are built by `lkng-album`,
+/// which owns their format. Taking `Kind::AlbumGrant` would mean this
+/// function could produce a payload that decodes as a grant with no key in
+/// it, and the failure would land on the recipient rather than the caller.
 pub fn encode_payload(kind: Kind, body: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len() + 1);
     out.push(match kind {
-        Kind::Text => MARK_TEXT,
         Kind::Tap => MARK_TAP,
+        // Anything not a tap is text as far as this encoder is concerned.
+        _ => MARK_TEXT,
     });
     out.extend_from_slice(body.as_bytes());
     out
@@ -67,6 +80,12 @@ pub fn encode_payload(kind: Kind, body: &str) -> Vec<u8> {
 
 /// Decode a payload, tolerating the pre-marker format.
 fn decode_payload(bytes: &[u8]) -> Option<(Kind, String)> {
+    // Checked first: a grant carries no marker byte (it is defined by
+    // `lkng-album`, which knows nothing about this module's framing), so it
+    // must be recognised before anything falls through to the text branch.
+    if lkng_album::Grant::decode(bytes).is_some() {
+        return Some((Kind::AlbumGrant, String::new()));
+    }
     match bytes.first() {
         Some(&MARK_TEXT) => String::from_utf8(bytes[1..].to_vec())
             .ok()
@@ -77,6 +96,30 @@ fn decode_payload(bytes: &[u8]) -> Option<(Kind, String)> {
             .ok()
             .map(|s| (Kind::Text, s)),
     }
+}
+
+/// Every album grant sitting in an inbox state, with who sent it.
+///
+/// Kept separate from [`threads_from_inbox`] rather than folded into it: a
+/// grant is not a message, and putting one in a conversation would show the
+/// user a line they did not receive and cannot reply to.
+pub fn grants_from_inbox(id: &Identity, state_bytes: &[u8]) -> Vec<([u8; 32], lkng_album::Grant)> {
+    if state_bytes.is_empty() {
+        return Vec::new();
+    }
+    let Ok(state) = ciborium::de::from_reader::<InboxState, _>(state_bytes) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for env in state.envelopes.values() {
+        let Ok(plain) = id.open_message(env) else { continue };
+        let Some(grant) = lkng_album::Grant::decode(&plain) else { continue };
+        // The sender pseudonym, so the UI can say whose album it is using
+        // the same identity the grid shows.
+        let from = *blake3::hash(&env.sender_epoch_vk).as_bytes();
+        out.push((from, grant));
+    }
+    out
 }
 
 /// One decrypted message, ready to render.
