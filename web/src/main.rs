@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b33485";
+pub const BUILD_MARKER: &str = "b33708";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -515,6 +515,112 @@ impl Tab {
     }
 }
 
+
+/// Storage key for the 18+ declaration.
+const AGE_OK_KEY: &str = "lkng.age.confirmed.v1";
+
+fn age_confirmed() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(AGE_OK_KEY).ok().flatten())
+        .is_some()
+}
+
+fn set_age_confirmed() {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        // The flag, not the date. The date was needed to answer the
+        // question; keeping it afterwards would store a more identifying
+        // value than the answer requires, for no benefit.
+        let _ = s.set_item(AGE_OK_KEY, "1");
+    }
+}
+
+/// Today, as `(year, month, day)` in local time.
+fn today_ymd() -> (i32, u32, u32) {
+    let d = js_sys::Date::new_0();
+    (d.get_full_year() as i32, d.get_month() + 1, d.get_date())
+}
+
+/// The 18+ gate, shown before anything else on first run.
+///
+/// Blocking rather than dismissible: a gate you can scroll past is not a
+/// gate. It appears before the grid renders, so no tile is ever drawn for
+/// someone who has not answered.
+#[component]
+fn AgeGate(onpass: EventHandler<()>) -> Element {
+    let mut year = use_signal(String::new);
+    let mut month = use_signal(String::new);
+    let mut day = use_signal(String::new);
+    let mut err = use_signal(|| None::<String>);
+
+    rsx! {
+        div { class: "gate",
+            div { class: "gate-card",
+                h1 { "LKNG" }
+                p { class: "gate-lead", "You need to be 18 or over to use this app." }
+                p { class: "hint",
+                    "Your date of birth is checked on this device and stored nowhere. "
+                    "It is never published, and no part of this app can verify it — "
+                    "we ask because we would rather state the limit than pretend to "
+                    "enforce it."
+                }
+                div { class: "dob",
+                    input {
+                        r#type: "number", placeholder: "DD", value: "{day}",
+                        oninput: move |e| day.set(e.value()),
+                    }
+                    input {
+                        r#type: "number", placeholder: "MM", value: "{month}",
+                        oninput: move |e| month.set(e.value()),
+                    }
+                    input {
+                        r#type: "number", placeholder: "YYYY", value: "{year}",
+                        oninput: move |e| year.set(e.value()),
+                    }
+                }
+                if let Some(m) = err() {
+                    div { class: "warn", "{m}" }
+                }
+                button {
+                    class: "primary wide",
+                    onclick: move |_| {
+                        let parsed = (
+                            year.peek().trim().parse::<i32>().ok(),
+                            month.peek().trim().parse::<u32>().ok(),
+                            day.peek().trim().parse::<u32>().ok(),
+                        );
+                        let Some(born) = (match parsed {
+                            (Some(y), Some(m), Some(d)) => Some((y, m, d)),
+                            _ => None,
+                        }) else {
+                            err.set(Some("Please enter your full date of birth.".into()));
+                            return;
+                        };
+                        match lkng_app::check_age(born, today_ymd()) {
+                            lkng_app::AgeCheck::Ok => {
+                                set_age_confirmed();
+                                onpass.call(());
+                            }
+                            lkng_app::AgeCheck::TooYoung => err.set(Some(
+                                "You need to be 18 or over to use LKNG.".into(),
+                            )),
+                            lkng_app::AgeCheck::Invalid => err.set(Some(
+                                "That does not look like a date of birth.".into(),
+                            )),
+                        }
+                    },
+                    "Continue"
+                }
+                p { class: "hint",
+                    "By continuing you agree this app publishes a photo and headline "
+                    "to a public peer-to-peer network, which cannot be un-published. "
+                    "Nothing is published until you add a headline."
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn App() -> Element {
     let session = use_hook(me);
@@ -592,7 +698,12 @@ fn App() -> Element {
             let cov = cov.clone();
             async move {
                 loop {
-                    if *node.status.borrow() == Status::Connected {
+                    // Age gate first. The publish gate would already refuse a
+                    // user with no headline, so this changes nothing today —
+                    // but "nothing is published before you have answered" is
+                    // a property that should not depend on a coincidence in
+                    // a different function.
+                    if *node.status.borrow() == Status::Connected && age_confirmed() {
                         let session = me();
                         let (cov_now, fix_now) = coverage_for(&session);
                         // Recomputed rather than captured: the epoch turns
@@ -618,6 +729,7 @@ fn App() -> Element {
     let live = !found.is_empty();
     let tiles = if live { found } else { demo_tiles(&session, &cov) };
 
+    let mut age_ok = use_signal(age_confirmed);
     let mut tab = use_signal(|| Tab::Browse);
     let mut menu = use_signal(|| false);
     let draft = use_signal(load_draft);
@@ -700,6 +812,17 @@ fn App() -> Element {
             s.describe(&net::node_url())
         ),
     };
+
+    if !age_ok() {
+        return rsx! {
+            document::Meta {
+                name: "viewport",
+                content: "width=device-width, initial-scale=1, viewport-fit=cover",
+            }
+            style { dangerous_inner_html: CSS }
+            AgeGate { onpass: move |_| age_ok.set(true) }
+        };
+    }
 
     rsx! {
         // viewport-fit=cover, or env(safe-area-inset-*) is always 0 and
