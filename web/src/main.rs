@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b32890";
+pub const BUILD_MARKER: &str = "b33158";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -592,6 +592,12 @@ fn App() -> Element {
         .into_iter()
         .partition(|t| t.messages.iter().all(|m| m.kind == chat::Kind::Tap));
 
+    // Mirrors the gate in `publish_presence` exactly. Kept as one expression
+    // so the UI cannot claim visibility the publisher would refuse.
+    let visible_to_others = status == Status::Connected
+        && fix == Fix::Device
+        && !draft.read().headline.trim().is_empty();
+
     let note = match (&status, live) {
         (Status::Connected, true) => {
             "Live from the network. Everyone nearby, no distances, no company in the middle."
@@ -948,6 +954,25 @@ fn App() -> Element {
                     if t == Tab::Taps && !taps.is_empty() {
                         span { class: "pip", "{taps.len()}" }
                     }
+                }
+            }
+        }
+
+        // Whether *they* are in the grid, not just whether they can see it.
+        // An app that publishes you to a public cell owes you a plain
+        // statement of whether it has done so; "trust us" is the thing this
+        // whole project exists to refuse.
+        if tab() == Tab::Browse {
+            div {
+                class: if visible_to_others { "visnote on" } else { "visnote" },
+                if visible_to_others {
+                    "You're visible in {cov.home.as_str()}"
+                } else if fix != Fix::Device {
+                    "You're not visible — waiting for your location"
+                } else if draft.read().headline.trim().is_empty() {
+                    "You're not visible — add a headline to appear in the grid"
+                } else {
+                    "You're not visible — connecting"
                 }
             }
         }
