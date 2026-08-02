@@ -13,6 +13,7 @@
 //!   signed and genuinely verified; only delivery is faked.
 
 mod net;
+mod photo;
 
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
