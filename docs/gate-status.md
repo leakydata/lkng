@@ -2001,3 +2001,40 @@ connections** and 1.2 GB RSS after an evening of `fdev` invocations. That is
 a development artefact — a user's node has one client — but it is the same
 shape as the self-inflicted DoS fixed earlier with `Demux::close()`, this
 time from tooling rather than our examples. Noted, not chased tonight.
+
+## 2026-08-02 — the reproduction, and what it actually shows
+
+`scripts/repro-idle-cpu.sh`: fresh node, empty data dir, no contracts, no
+clients, 90 s to join, then sampled identically to everything else.
+
+```text
+fresh node   (0 contracts, 0 clients):    0.4% of one core,   42 MB
+established  (many contracts):           27.4% of one core, 1192 MB
+```
+
+**A node hosting nothing costs nothing.** So the idle cost is not a baseline
+the node always pays — it is roughly proportional to hosted contracts. The
+fresh node logged zero `summarize_contract_state` lines, which fits.
+
+Three things follow.
+
+**The upstream report is now sharp and actionable.** Not "a node is slow on a
+phone", which invites the true and unhelpful answer that phone cores are
+slow, but "per-contract idle cost is significant and mostly recomputes an
+identical summary". It has a reproduction script that runs in four minutes.
+
+**The desktop/phone gap makes sense.** Both nodes host a lot; the phone has
+a weaker core. Nothing mysterious remains.
+
+**And it names LKNG's own lever.** What a phone costs its owner is set by
+*how many contracts it hosts*. That is a product decision we control, not
+something to wait upstream for. Cutting the watch set 18 → 10 was the right
+direction taken for the wrong reason — I did it hoping to reduce CPU on a
+node whose app was not even connected. The reasoning was wrong; the change
+was right, and now for a reason that is measured.
+
+Worth stating plainly: three consecutive attempts to explain the CPU were
+wrong (the summarize cost, the subscription count, a phone-specific defect).
+Each was disproved in minutes by measuring instead of arguing. The pattern
+of the whole session holds — reading and reasoning produced confident wrong
+answers, and running something produced the right one every time.

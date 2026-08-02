@@ -123,3 +123,5 @@ utc_iso,contract,label,http_code,time_total_s
 2026-08-02T04:33:48Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.075539960
 2026-08-02T05:03:48Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.004768
 2026-08-02T05:03:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.074309125
+2026-08-02T05:33:49Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.005097
+2026-08-02T05:33:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.075139672

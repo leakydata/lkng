@@ -1,7 +1,7 @@
-# Idle node burns ~50% of one CPU core; `summarize_contract_state` called ~89×/s
+# Idle CPU scales with hosted contracts; `summarize_contract_state` called ~89×/s
 
-**Status:** draft, not yet filed. Characterised on one device; a maintainer
-would reasonably want it reproduced on a second before acting.
+**Status:** draft. Reproduction script included and run;
+[`scripts/repro-idle-cpu.sh`](../../scripts/repro-idle-cpu.sh).
 
 ## Summary
 
@@ -69,6 +69,28 @@ By comparison, over the same period: `peer_connection` 632 log events,
   connected during measurement.
 - **Client activity** — none. No WebSocket connection existed.
 
+## The reproduction: cost scales with hosted contracts
+
+`scripts/repro-idle-cpu.sh` starts a **fresh node** — empty data directory,
+no contracts, no clients — lets it join the ring for 90 s, then samples CPU
+identically to everything above. On the same machine, at the same moment, it
+also samples the long-running node that hosts many contracts:
+
+```text
+fresh node   (0 contracts, 0 clients):    0.4% of one core,   42 MB
+established  (many contracts):           27.4% of one core, 1192 MB
+```
+
+**A node with nothing to host costs essentially nothing.** The idle cost is
+not a constant baseline; it is roughly proportional to what the node is
+holding. The fresh node also logged **zero** `summarize_contract_state`
+rate-limit lines, consistent with having nothing to summarise.
+
+That makes the mechanism concrete: the per-contract idle cost, multiplied by
+contract count, is what consumes half a phone core. It also suggests the fix
+is tractable — an idle contract's state does not change between calls, so
+almost all of that ~89 calls/second is recomputing an identical summary.
+
 ## A desktop comparison, which complicates the story
 
 The same node software on x86_64 (Xeon E5-2630 v4, 2.2–3.1 GHz), same
@@ -93,8 +115,8 @@ user's node would accumulate.
 
 ## Questions
 
-1. Is ~89 calls/s/node the intended summarisation cadence on an idle node
-   with no client, or is something re-triggering it?
+1. Is ~89 calls/s the intended summarisation cadence for an idle node with
+   no client connected, given that the cost scales with contract count?
 2. Can summaries be cached and invalidated on state change? An idle
    contract's state does not change between calls, so nearly all of this
    work recomputes an identical answer.
