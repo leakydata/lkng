@@ -129,3 +129,7 @@ utc_iso,contract,label,http_code,time_total_s
 2026-08-02T06:03:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.075582925
 2026-08-02T06:33:49Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.154760
 2026-08-02T06:33:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.075174841
+2026-08-02T07:03:49Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.004785
+2026-08-02T07:03:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.076108747
+2026-08-02T07:33:49Z,EqJ5YpEEV3XLqEvKWLQHFhGAac2qXzSUoE6k2zbdnXBr,baseline_popular,200,0.005290
+2026-08-02T07:33:49Z,DcxbCZAiajvVpDk2dKmAVCCCiopVJ23TQoWqqkw1DaPT,fresh_zero_subscriber,200,.076449930

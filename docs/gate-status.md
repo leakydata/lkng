@@ -2164,3 +2164,37 @@ Verified by a clean Kotlin compile and installed on the device. Not yet
 verified in the failure case: forcing the backlog to fill takes hours, and
 claiming it works without having seen it fire would be exactly the mistake
 this log keeps recording.
+
+## 2026-08-02 — a fourth point, and the third correction on the same topic
+
+```text
+ 2 min:   7.1% of one core
+34 min:  12.6%
+70 min:  28.6%   <- already at the five-hour level
+ 5 h:    27.4%
+```
+
+**It is a warm-up, not a leak.** CPU ramps over roughly an hour, reaches
+~28%, and stops. The 70-minute and five-hour readings agree. And the dead
+client sockets sit at exactly 7 at both 34 and 70 minutes — not
+accumulating either, within this window.
+
+So both alarming readings from earlier tonight were wrong, and wrong the same
+way: **a curve drawn through two points is not a curve.** I described
+"CPU quadruples over five hours" and "dead sockets accumulate" from samples
+an hour apart, and a third and fourth point turned both into something
+ordinary — a service warming up to steady state.
+
+That is now three consecutive corrections on this single topic (contracts
+don't persist → they do; fdev leaked the sockets → it didn't; unbounded
+growth → a plateau). The common cause is not carelessness with any one
+measurement; it is reaching for the shape of an explanation before there
+were enough points to constrain it.
+
+The upstream draft is corrected accordingly and its second question is now
+the honest one: *what is the node doing during the one-hour ramp?* — rather
+than a claim of unbounded growth that would have been refuted by the first
+maintainer who ran it for ninety minutes.
+
+The `summarize_contract_state` rate and the 0.4%-vs-28% contract dependency
+are unaffected: both were measured directly rather than extrapolated.

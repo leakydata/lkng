@@ -80,12 +80,18 @@ also samples the long-running node that hosts many contracts:
 empty data dir, 0 contracts, 0 clients:   0.4% of one core,   42 MB
 same contracts,  2 min uptime:            7.1% of one core, 1040 MB
 same contracts, 34 min uptime:           12.6% of one core, 1218 MB
+same contracts, 70 min uptime:           28.6% of one core, 1182 MB
 same contracts,  5 h  uptime:            27.4% of one core, 1192 MB
 ```
 
-The three loaded readings are the **same node with the same data directory**,
-sampled at increasing uptime, with no meaningful change to the contract set
-between them.
+The loaded readings are the **same node, same data directory**, sampled at
+increasing uptime with no meaningful change to the contract set.
+
+**It is a warm-up, not a leak.** CPU ramps over roughly an hour and then sits
+at ~28%: the 70-minute and 5-hour readings are the same. Earlier drafts of
+this report described it as growing 4× over five hours, which was an artefact
+of having only two samples an hour apart. It reaches steady state and stays
+there.
 
 Two things, not one:
 
@@ -124,26 +130,28 @@ measured on weaker hardware*, not a mobile-only defect.
 
 ## Client connections are not reaped
 
-Related, and possibly the same underlying accumulation: 34 minutes after a
-clean restart the node holds **7 established connections on its client API
-port whose remote peers have no owning process**. Nothing was connected —
-no `fdev`, no app, no examples running.
+34 minutes after a clean restart the node holds **7 established connections
+on its client API port whose remote peers have no owning process**. Nothing
+was connected — no `fdev`, no app, no examples running. At 70 minutes it is
+still exactly 7, so within this window they are not accumulating.
 
 We first noticed this as `LISTEN 129 128` earlier in development: the node
 had exhausted its accept backlog and was refusing new client connections,
 which presented as the network being down. We fixed our side (examples now
 close their sessions explicitly), and connections still accumulate.
 
-If dead client sockets are never reaped, a long-lived node eventually stops
-accepting clients — on a phone, that is the app silently losing its own node.
+Whether they accumulate over much longer periods is untested — the earlier
+`LISTEN 129 128` was reached after a full day of development. Stated as an
+observation, not a diagnosis.
 
 ## Questions
 
 1. Is ~89 calls/s the intended summarisation cadence for an idle node with
    no client connected?
-2. **Why does CPU grow ~4× over five hours on an unchanged contract set?**
-   That is the part we cannot account for, and it is the one that decides
-   whether a phone node is viable over a day rather than an hour.
+2. **What is the node doing during the ~1 hour ramp to steady state?** Cost
+   rises from 7% to ~28% and then stops rising. Something is being
+   established or filled in that window; understanding it may be the same
+   question as the summarisation rate.
 3. Can summaries be cached and invalidated on state change? An idle
    contract's state does not change between calls, so nearly all of this
    work recomputes an identical answer.
