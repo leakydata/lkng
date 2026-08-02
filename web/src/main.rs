@@ -600,6 +600,129 @@ fn App() -> Element {
             SettingsPanel { onclose: move |_| tab.set(Tab::Browse) }
         }
 
+        if tab() == Tab::Messages {
+            main { class: "screen",
+                h2 { class: "screen-h", "Messages" }
+                if threads.is_empty() {
+                    div { class: "empty",
+                        "No messages yet."
+                        br {}
+                        span { class: "hint",
+                            "Messages live on your device and in your inbox contract — "
+                            "there is no server keeping a copy."
+                        }
+                    }
+                }
+                for th in threads.iter().cloned() {
+                    button {
+                        key: "{hex(&th.peer)}",
+                        class: "thread",
+                        onclick: move |_| open_thread.set(Some(th.peer)),
+                        div { class: "thumb sm", style: "background: {swatch(&th.peer)}" }
+                        div { class: "thread-txt",
+                            div { class: "thread-name", "{th.headline}" }
+                            div { class: "thread-last",
+                                {th.last().map(|m| m.body.clone()).unwrap_or_default()}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if tab() == Tab::Taps {
+            main { class: "screen",
+                h2 { class: "screen-h", "Taps" }
+                div { class: "empty",
+                    "Nobody has tapped you yet."
+                    br {}
+                    span { class: "hint",
+                        "A tap is a signed message to your inbox, like any other — "
+                        "so nobody can see who tapped you except you."
+                    }
+                }
+            }
+        }
+
+        if tab() == Tab::Albums {
+            main { class: "screen",
+                h2 { class: "screen-h", "Albums" }
+                div { class: "empty",
+                    "Albums aren't built yet."
+                    br {}
+                    span { class: "hint",
+                        "When they are, an album will be shared with named people "
+                        "rather than published — a private photo on a public network "
+                        "cannot be un-shared, so it must never be public in the first place."
+                    }
+                }
+            }
+        }
+
+        // The open conversation, over everything else.
+        if let Some(peer) = open_thread() {
+            {
+                let th = threads.iter().find(|t| t.peer == peer).cloned();
+                let tile = visible.iter().find(|t| t.pseudonym == peer).cloned();
+                rsx! {
+                    div { class: "convo",
+                        header { class: "bar",
+                            button { class: "linkish", onclick: move |_| open_thread.set(None),
+                                "‹ Back" }
+                            div { class: "brand",
+                                {th.as_ref().map(|t| t.headline.clone())
+                                    .unwrap_or_else(|| "Conversation".into())}
+                            }
+                        }
+                        div { class: "msgs",
+                            if let Some(t) = th.as_ref() {
+                                for (i, m) in t.messages.iter().enumerate() {
+                                    div {
+                                        key: "{i}",
+                                        class: if m.outgoing { "msg out" } else { "msg in" },
+                                        "{m.body}"
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(e) = send_error() {
+                            div { class: "warn", "{e}" }
+                        }
+                        div { class: "composer",
+                            input {
+                                r#type: "text",
+                                placeholder: "Message",
+                                value: "{compose}",
+                                oninput: move |e| compose.set(e.value()),
+                            }
+                            button {
+                                class: "primary",
+                                disabled: tile.as_ref().map(|t| t.encryption_key.is_none())
+                                    .unwrap_or(true),
+                                onclick: {
+                                    let node = node.clone();
+                                    let cov = cov.clone();
+                                    move |_| {
+                                        let Some(t) = tile.clone() else { return };
+                                        let body = compose.peek().clone();
+                                        if body.trim().is_empty() { return }
+                                        match send_message(&node, &me(), &t, cov.epochs[0], &body) {
+                                            Ok(()) => {
+                                                compose.set(String::new());
+                                                send_error.set(None);
+                                            }
+                                            Err(e) => send_error.set(Some(e)),
+                                        }
+                                    }
+                                },
+                                "Send"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         main { class: if tab() == Tab::Browse { "" } else { "hidden" },
             p { class: "note", "{note}" }
 
