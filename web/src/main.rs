@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b31893";
+pub const BUILD_MARKER: &str = "b32657";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -267,15 +267,29 @@ fn coverage_for(s: &Session) -> (Coverage, Fix) {
     (cov, fix)
 }
 
-/// Parameters of our own inbox contract.
+/// Parameters of our inbox for one epoch.
 ///
-/// Addressed by the **durable** verifying key, not an epoch subkey — an
-/// inbox that moved every six hours would strand messages sent minutes
-/// before the rollover, and there is no server to forward them. The address
-/// is a hash of the key (see `lkng_inbox::address_of`), so publishing it
-/// does not publish the key itself.
-fn my_inbox_params(session: &Session) -> InboxParams {
-    InboxParams::new(session.identity().verifying_key_bytes())
+/// # Why the inbox is addressed by the epoch key, not the durable one
+///
+/// A stranger who taps "message" on a tile knows exactly one thing about
+/// you: the epoch verifying key that signed it. They cannot know your
+/// durable key — that is the entire point of signing tiles with subkeys —
+/// so a durable-addressed inbox is one they have no way to find. An earlier
+/// version tried it anyway and failed on the network with "signature
+/// verification failed", because the envelope was bound to one key while the
+/// contract was addressed by another.
+///
+/// So the inbox rotates with the epoch, and the client watches the **current
+/// and previous** epochs — the same trick the grid uses so a rollover never
+/// empties it. A message sent moments before a rollover lands in the
+/// previous-epoch inbox, which is still subscribed.
+///
+/// The cost, stated plainly: mail sent to an inbox older than two epochs
+/// (12 h) is not collected. Epoch keys are *derived* from the master seed
+/// rather than discarded, so nothing is cryptographically lost and a future
+/// version can sweep further back; today it simply does not look.
+fn inbox_params_for(session: &Session, epoch: u64) -> InboxParams {
+    InboxParams::new(session.identity().for_epoch(epoch).verifying_key_bytes())
 }
 
 fn cbor(v: &impl serde::Serialize) -> Vec<u8> {
@@ -452,8 +466,14 @@ fn App() -> Element {
                 // while the app is open lands without a poll. Requested with
                 // the same call the grid uses; there is nothing special about
                 // an inbox from the node's point of view.
-                let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params(&me())));
-                node.get(key, true);
+                // Both epochs, for the same reason the grid watches both:
+                // a message sent just before a rollover is addressed to the
+                // older key, and there is no server to forward it.
+                let session = me();
+                for epoch in cov.epochs {
+                    let key = Node::key_for(INBOX_WASM, &cbor(&inbox_params_for(&session, epoch)));
+                    node.get(key, true);
+                }
                 requested.set(true);
             }
         });
@@ -506,9 +526,18 @@ fn App() -> Element {
     // is world-writable, so "blocked" has to mean invisible rather than
     // collapsed, or blocking someone still lets them occupy your screen.
     let threads: Vec<Thread> = {
-        let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params(&session)));
-        let state = node.state_of(key.id()).unwrap_or_default();
-        chat::threads_from_inbox(session.identity(), &state, &visible, &blocked.read())
+        let mut all = Vec::new();
+        for epoch in cov.epochs {
+            let key = Node::key_for(INBOX_WASM, &cbor(&inbox_params_for(&session, epoch)));
+            let state = node.state_of(key.id()).unwrap_or_default();
+            all.extend(chat::threads_from_inbox(
+                session.identity(),
+                &state,
+                &visible,
+                &blocked.read(),
+            ));
+        }
+        chat::merge_threads(all)
     };
 
     let note = match (&status, live) {

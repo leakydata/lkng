@@ -1296,3 +1296,36 @@ was private. The Message button is disabled with the reason stated.
 All three of today's bugs were the same bug: **a build step that silently
 produced something other than what the source said.** None was a logic
 error, and none would have been found by reading the code.
+
+## 2026-08-01 — tile → message proven on mainnet, and why the inbox rotates
+
+`tile_to_message` now runs green against the live network: Sam posts a tile,
+Alex reads the cell exactly as a scraper would, seals a message using
+**only** what the tile carried, and Sam reads it. No profile is exchanged
+and no handshake happens.
+
+**The bug it caught is the interesting part.** The first run failed on the
+network with `inbox failed verification: signature verification failed`.
+Cause: the inbox was addressed by the recipient's *durable* verifying key,
+but a stranger holding a tile can only know the recipient's *epoch* key —
+that is the whole point of signing tiles with subkeys. So the envelope was
+bound to one key while the contract was addressed by another.
+
+This was not a coding slip; it was a design hole with no local symptom. Every
+unit test passed, because in a test both parties are the same process and
+"the durable key" is simply available. It could only fail where it did: on
+the wire, between two parties who genuinely know different things.
+
+**Fix:** inboxes are addressed by the epoch key and the client watches the
+**current and previous** epoch — the same construction the grid already uses
+so a rollover never empties it. Stated cost: mail older than two epochs
+(12 h) is not collected. Epoch keys are derived from the master seed rather
+than discarded, so nothing is cryptographically lost; today the client simply
+does not look further back.
+
+The example also asserts, against the bytes that crossed the wire, that
+neither the durable verifying key nor the durable encryption key appears in
+cell state. That assertion is the one guarding the property that would
+otherwise fail *silently*: if someone later "simplified" the tile's
+encryption key to a durable one, messaging would keep working perfectly and
+every user would quietly become trackable across every epoch and area.

@@ -86,10 +86,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     demux.await_reply(r, Duration::from_secs(120)).await?;
     println!("sam's tile is in cell {}: {ckey}", params.cell_id);
 
-    // Sam's inbox is addressed by Sam's *durable* key. An inbox that rotated
-    // with the epoch would strand anything sent near a rollover, and there
-    // is no server to forward it.
-    let sam_inbox = InboxParams::new(sam.verifying_key_bytes());
+    // Sam's inbox is addressed by Sam's **epoch** key, because that is the
+    // only key a stranger holding the tile can possibly know. Addressing it
+    // by the durable key instead is not a style choice — it fails on the
+    // network with "signature verification failed", because the envelope is
+    // bound to one key while the contract is addressed by another. Sam
+    // watches the current and previous epoch, exactly as the grid does.
+    let sam_inbox = InboxParams::new(sam.for_epoch(params.epoch).verifying_key_bytes());
     let ip = cbor(&sam_inbox);
     let ikey = FreenetClient::key_for(&inbox_code, &ip);
     let r = demux.expect(*ikey.id(), ReplyKind::Put);
@@ -194,7 +197,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut read = 0usize;
     for env in inbox.pending() {
-        let Ok(text) = sam.open_message(env) else {
+        // Opened with the *epoch* identity: the envelope was sealed to the
+        // epoch encryption key that the tile advertised, so the durable
+        // identity cannot open it -- which is the property, not a limitation.
+        let Ok(text) = sam.for_epoch(params.epoch).open_message(env) else {
             continue;
         };
         println!("\nsam reads: \"{}\"", String::from_utf8_lossy(&text));

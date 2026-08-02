@@ -120,6 +120,33 @@ pub fn threads_from_inbox(
     out
 }
 
+/// Fold per-epoch thread lists into one.
+///
+/// Inboxes rotate with the epoch, so the same conversation can have messages
+/// sitting in two contracts at once — merging them here is what makes an
+/// epoch rollover invisible to the person reading their messages, rather
+/// than something that appears to split a conversation in half.
+pub fn merge_threads(lists: Vec<Thread>) -> Vec<Thread> {
+    let mut by_peer: std::collections::BTreeMap<[u8; 32], Thread> = Default::default();
+    for th in lists {
+        match by_peer.get_mut(&th.peer) {
+            Some(existing) => existing.messages.extend(th.messages),
+            None => {
+                by_peer.insert(th.peer, th);
+            }
+        }
+    }
+    let mut out: Vec<Thread> = by_peer.into_values().collect();
+    for th in &mut out {
+        th.messages.sort_by_key(|m| m.sent_ms);
+        // The same envelope can legitimately reach us twice; showing a
+        // message twice reads as a bug in a way a missing one does not.
+        th.messages.dedup_by(|a, b| a.sent_ms == b.sent_ms && a.body == b.body);
+    }
+    out.sort_by_key(|t| std::cmp::Reverse(t.last().map(|m| m.sent_ms).unwrap_or(0)));
+    out
+}
+
 #[derive(Debug)]
 pub enum SendError {
     /// Their tile carries no encryption key: an older client, or a record
