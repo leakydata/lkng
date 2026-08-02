@@ -441,7 +441,7 @@ fn App() -> Element {
                 // while the app is open lands without a poll. Requested with
                 // the same call the grid uses; there is nothing special about
                 // an inbox from the node's point of view.
-                let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params()));
+                let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params(&me())));
                 node.get(key, true);
                 requested.set(true);
             }
@@ -479,10 +479,26 @@ fn App() -> Element {
     let mut draft = use_signal(load_draft);
     let mut blocked = use_signal(Vec::<[u8; 32]>::new);
     let mut selected = use_signal(|| None::<Tile>);
+    let mut open_thread = use_signal(|| None::<[u8; 32]>);
+    let mut compose = use_signal(String::new);
+    let mut send_error = use_signal(|| None::<String>);
     let visible: Vec<Tile> = tiles
         .into_iter()
         .filter(|t| !blocked.read().contains(&t.pseudonym))
         .collect();
+
+    // Inbox: whatever the node currently holds for our own inbox contract,
+    // decrypted here and nowhere else. Recomputed each render off the shared
+    // generation counter, so a pushed message appears without a refresh.
+    //
+    // Blocked senders are filtered *before* anything is rendered: an inbox
+    // is world-writable, so "blocked" has to mean invisible rather than
+    // collapsed, or blocking someone still lets them occupy your screen.
+    let threads: Vec<Thread> = {
+        let key = Node::key_for(INBOX_WASM, &cbor(&my_inbox_params(&session)));
+        let state = node.state_of(key.id()).unwrap_or_default();
+        chat::threads_from_inbox(session.identity(), &state, &visible, &blocked.read())
+    };
 
     let note = match (&status, live) {
         (Status::Connected, true) => {
