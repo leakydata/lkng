@@ -1906,3 +1906,29 @@ The `summarize_state` fix stands on its own merits regardless — decoding
 16 KiB thumbnails to collect map keys was wasteful at any call rate — but it
 is not yet shown to have changed anything measurable, and should not be
 described as though it had.
+
+**The quiet experiment answered it.** Thirty minutes with no publishing, no
+smoke runs, node completely idle:
+
+```text
+00:15   53.0% core   rss 614 MB    <- peak, still mid-churn
+00:20   55.8%        rss 438 MB
+00:30   53.3%        rss 385 MB
+00:40   48.7%        rss 368 MB
+```
+
+**Memory does not leak.** RSS gave back ~250 MB within 20 minutes of the
+activity stopping. It grows with hosted contracts and releases them —
+hypothesis (2). The alarming climb was my own churn: a dozen 2.7 MB UI
+versions plus repeated smoke suites in 90 minutes, which is nothing like a
+user's pattern. Good news, and worth the half hour of patience to establish
+rather than assume.
+
+**CPU did not follow it down.** It settled at ~49–53% and stayed there with
+the node doing nothing anyone asked for. So the earlier 41% figure was, if
+anything, generous, and the cost is a genuine baseline rather than an
+artefact of how I was working. That is now the single biggest unsolved
+problem with LKNG on a phone, and the README says so in those terms.
+
+It also means the `summarize_state` optimisation, while correct, was not the
+bottleneck. The call rate is upstream's and the draft issue stands.

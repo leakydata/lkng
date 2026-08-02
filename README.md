@@ -112,10 +112,16 @@ before that date, it was not true.
 
 ### Caveats, honestly
 
-- **CPU is ~41% of one core, sustained**, while contributing (measured over
-  30 minutes on a dozing, charging Z Flip 4). That is a lot for a background
-  service, and reducing it is unsolved — the cap above lowers the off-
-  condition cost but does nothing about the contributing case.
+- **CPU is ~50% of one core, sustained**, while contributing — measured over
+  100 minutes on a dozing, charging Z Flip 4, and it does not fall when the
+  node is left completely idle. That is a lot for a background service and
+  is currently the biggest unsolved problem with running this on a phone.
+  The duty-cycle cap lowers the off-condition cost and does nothing for the
+  contributing case.
+- **Memory is not leaking, which was worth checking.** RSS climbed
+  275 MB → 614 MB during heavy contract publishing, then reclaimed to
+  ~365 MB within 20 minutes of going idle. It grows with hosted contracts
+  and gives the memory back; it does not ratchet.
 - **Battery drain is still unmeasured.** adb requires the cable, so the phone
   always reads as plugged and any drain figure would be meaningless. It needs
   a cable-free run.
