@@ -1490,3 +1490,12 @@ which tile filed it. That matters most in exactly the case reporting matters
 most — a small cell, a dangerous person. Harvest's blind-signed tokens are
 the real fix and are not built; until they are, the honest move is to say so
 where the user can read it, not only in a doc.
+
+**Proven on mainnet** (`report_flow`): five reports from three people land
+in a feed, all verify against fetched bytes, and `reporter_count` returns
+**3, not 5**. No reporter's durable key appears in 27 339 bytes of feed
+state. Running it twice produces byte-identical state, which also
+demonstrates content-id dedup — a replayed report is not a second report.
+
+Written before trusting the path, on the principle the day established: two
+write paths tonight were broken in ways reading them could not reveal.
