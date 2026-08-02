@@ -2136,3 +2136,31 @@ Both corrections tonight came from the same habit — I explained a number
 with the most available story rather than checking it. "fdev leaked these"
 was plausible, matched the timeline, and was wrong. One command to the
 process table settled it.
+
+## 2026-08-02 — a health check for a failure that lies
+
+`NodeService` now probes the client port every two minutes and restarts the
+node after two consecutive failures.
+
+The failure it exists for is one already observed: the node stops accepting
+client connections while remaining alive. Process running, foreground
+notification cheerfully reporting "On the network", app unable to reach its
+own node. The user sees an empty grid and no messages and has no way to tell
+that anything is wrong — and neither would any liveness check that asks
+whether the process exists.
+
+Two consecutive failures rather than one, because a single failure can be a
+busy moment during startup or a network transition, and restarting on it is
+how a health check becomes a restart loop worse than the fault. Two minutes
+apart is far below the timescale on which the backlog fills (hours) and well
+above any transient.
+
+`onDestroy` clears the flag and interrupts the thread before stopping the
+node — otherwise the check sees the port close and helpfully restarts a
+service the user has just stopped. A node that will not stay stopped is
+worse than one that will not stay running.
+
+Verified by a clean Kotlin compile and installed on the device. Not yet
+verified in the failure case: forcing the backlog to fill takes hours, and
+claiming it works without having seen it fire would be exactly the mistake
+this log keeps recording.

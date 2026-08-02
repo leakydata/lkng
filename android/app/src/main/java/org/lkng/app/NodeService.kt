@@ -12,6 +12,9 @@ import android.os.BatteryManager
 import android.os.IBinder
 import android.util.Log
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
+import kotlin.concurrent.thread
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -126,6 +129,7 @@ class NodeService : Service() {
                 if (contributing) "On the network · contributing"
                 else "On the network · saving battery"
             )
+            startHealthCheck()
             Log.i(
                 TAG,
                 "node started, contributing=$contributing" +
@@ -156,6 +160,12 @@ class NodeService : Service() {
      * the user would stop receiving messages and nothing would say so. Five
      * keeps it a participating peer at roughly a quarter of the relay load.
      */
+    /** How often the health check probes the client port. */
+    private val HEALTH_INTERVAL_MS = 2 * 60 * 1000L
+
+    @Volatile private var healthThread: Thread? = null
+    @Volatile private var stopping = false
+
     private val LEAN_CONNECTIONS = 5
 
     /** 200 KB/s total while saving battery, against a 3 MB/s default. */
@@ -171,6 +181,70 @@ class NodeService : Service() {
         val wifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ?: false
 
         return charging && unmetered && wifi
+    }
+
+    /**
+     * Restart the node if it stops accepting client connections.
+     *
+     * ## Why this is necessary rather than paranoid
+     *
+     * The node accumulates established connections on its client API whose
+     * peers no longer exist — 7 of them within 34 minutes of a clean restart,
+     * with nothing connected. Earlier in development the same accumulation
+     * reached `LISTEN 129 128`: the accept backlog was full and the node
+     * refused every new client.
+     *
+     * That failure is quiet and cruel on a phone. The process is alive, the
+     * foreground service says "On the network", and the app cannot reach its
+     * own node — so the user sees an empty grid and no messages, with
+     * everything insisting it is fine. A liveness check that only asks
+     * "is the process running?" would report healthy throughout.
+     *
+     * So the check is what the app actually needs: **can a socket be opened
+     * to the client port?** If not, twice in a row, the node is restarted.
+     *
+     * ## Why twice, and why the interval is minutes
+     *
+     * A single failure can be a busy moment during startup or a network
+     * transition. Restarting on one is how a health check becomes a restart
+     * loop that is worse than the fault it was added for. Two minutes apart
+     * is far below the timescale on which the backlog fills (hours) and far
+     * above any transient.
+     */
+    private fun startHealthCheck() {
+        if (healthThread != null) return
+        healthThread = thread(isDaemon = true, name = "lkng-health") {
+            var consecutiveFailures = 0
+            while (!stopping) {
+                Thread.sleep(HEALTH_INTERVAL_MS)
+                if (stopping) break
+                if (state.get() != NodeState.ONLINE && state.get() != NodeState.DEGRADED) {
+                    continue
+                }
+                val reachable = try {
+                    Socket().use { sock ->
+                        sock.connect(InetSocketAddress("127.0.0.1", WS_PORT), 3000)
+                        true
+                    }
+                } catch (e: Exception) {
+                    false
+                }
+
+                if (reachable) {
+                    consecutiveFailures = 0
+                } else {
+                    consecutiveFailures++
+                    Log.w(TAG, "node not accepting clients ($consecutiveFailures)")
+                    if (consecutiveFailures >= 2) {
+                        Log.w(TAG, "restarting node: client port unreachable twice")
+                        consecutiveFailures = 0
+                        stopNode()
+                        Thread.sleep(2000)
+                        startNode()
+                    }
+                }
+            }
+        }
     }
 
     private fun stopNode() {
@@ -200,6 +274,13 @@ class NodeService : Service() {
     }
 
     override fun onDestroy() {
+        // Let the health thread exit before the node goes down, or it sees
+        // the port close and "helpfully" restarts a service the user just
+        // stopped -- a node that will not stay stopped is worse than one
+        // that will not stay running.
+        stopping = true
+        healthThread?.interrupt()
+        healthThread = null
         stopNode()
         super.onDestroy()
     }

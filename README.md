@@ -91,6 +91,23 @@ One device on one network, so read it as an existence proof rather than a
 performance figure. The native shell (node runner, Keystore, permissions)
 still updates through the stores; only the UI and app logic move this way.
 
+### The node is watched, because it can fail quietly
+
+The node accumulates established connections on its client API whose peers
+no longer exist — 7 within 34 minutes of a clean restart, with nothing
+connected. Earlier in development this reached `LISTEN 129 128`: accept
+backlog full, every new client refused.
+
+That failure is quiet. The process is alive, the notification says "On the
+network", and the app cannot reach its own node — an empty grid and no
+messages, with everything insisting it is fine. A liveness check that asks
+"is the process running?" reports healthy throughout.
+
+So the service probes the **client port** every two minutes and restarts the
+node after two consecutive failures. Two, not one, because restarting on a
+single transient is how a health check becomes a restart loop worse than the
+fault it was added for.
+
 ### Duty cycling
 
 Users pay for this app with device resources rather than money, so the node
