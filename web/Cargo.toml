@@ -36,3 +36,23 @@ freenet-stdlib = { version = "0.8.5", features = ["net"] }
 getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+# Optimise the wasm for size, not speed.
+#
+# This binary is fetched over Freenet by every user, on a phone, and
+# re-fetched on every UI update — and the peers that carry it did not ask
+# for it. That makes bundle size a cost paid by other people's data
+# allowances, which is precisely the thing this project claims not to do.
+#
+# It nearly doubled in one evening (3.6 MB -> 6.7 MB) as messaging, albums
+# and moderation landed, so this is not premature.
+#
+# `opt-level = "z"` over `"s"`: nothing here is compute-bound. The heaviest
+# operation is an ML-DSA verification measured in milliseconds, and a user
+# waiting on a download notices megabytes long before they notice that.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

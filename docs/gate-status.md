@@ -1715,3 +1715,41 @@ reported as a failure.
 mistakes a green run for more than it is: the UI, the WebView, the Android
 node lifecycle and battery cost are all outside it. Two people on two phones
 remains the test that matters, and has still not happened.
+
+## 2026-08-01 — self-update over Freenet works, and the bundle was twice the size it needed to be
+
+**Two findings, one good and one embarrassing.**
+
+**The self-update path works.** The phone, dozing and locked with only its
+node running, was found holding build `b37214` — byte-identical to the
+desktop, fetched over Freenet with no adb involved. This morning I concluded
+the opposite and told the user so. That conclusion was drawn while
+republishing identical stale bytes, so the phone had nothing to fetch and
+"it never updates" was indistinguishable from "there is nothing new". The
+earlier retraction stands; this is the positive confirmation.
+
+The check that settles it, and the reason the marker exists: grep the
+*served wasm* for the build marker. Comparing the phone against the desktop
+proves only that two things agree, which they did all morning while both
+were wrong.
+
+**The bundle had no size optimisation at all.** The release profile was
+stock, and the wasm had grown 3.63 MB → 6.74 MB in one evening as messaging,
+albums and moderation landed. Adding `opt-level = "z"`, LTO,
+`codegen-units = 1`, `panic = "abort"` and `strip`:
+
+| | wasm |
+| --- | --- |
+| start of evening, fewer features | 3.63 MB |
+| after tonight's features, stock profile | 6.74 MB |
+| after tonight's features, size profile | **2.58 MB** |
+
+Smaller than it started, with far more in it.
+
+This matters more here than in most apps. The bundle is fetched over Freenet
+by every user, on a phone, and re-fetched on every UI update — carried by
+peers who did not ask for it. A project whose central claim is that it does
+not treat other people's resources as free had shipped an unoptimised 6.7 MB
+binary all evening. `opt-level = "z"` over `"s"` because nothing here is
+compute-bound: the heaviest operation is an ML-DSA verification in
+milliseconds, and nobody notices that who is waiting on megabytes.
