@@ -21,3 +21,8 @@ android/app/build/
 android/keystore.properties
 *.jks
 *.keystore
+
+# Legacy contract snapshots are committed on purpose -- see
+# contracts/legacy_contracts.toml. A migration path that requires rebuilding
+# a months-old toolchain to byte-identical output is not a migration path.
+!contracts/legacy/*.wasm

@@ -1,0 +1,77 @@
+# Contract version history.
+#
+# ## Why this file has to exist
+#
+# A Freenet contract's address is `BLAKE3(BLAKE3(wasm) || params)`. So **any**
+# change to a contract's code — including a field added to a struct it
+# serialises, including a dependency bump that alters generated code — moves
+# it to a new address. The old address keeps existing, with everybody's data
+# in it, and the new one starts empty. Nothing errors. The app simply looks
+# like every user is new.
+#
+# That is not a deployment concern to handle later. It is a data-loss event
+# that happens silently on an ordinary refactor, so the record of previous
+# versions has to be kept from the beginning rather than reconstructed after
+# someone notices their messages are gone.
+#
+# ## How to use it
+#
+# Before changing anything that alters a contract's compiled output, run:
+#
+#     scripts/snapshot-contract.sh <name>
+#
+# which copies the current wasm to `contracts/legacy/<name>-<n>.wasm`,
+# commits it, and appends an entry here. Clients read the legacy wasm to
+# derive the old address, fetch it, and merge that state forward.
+#
+# The wasm blobs are committed deliberately, despite the repo size: a
+# migration path that depends on rebuilding a months-old toolchain to
+# reproduce byte-identical output is not a migration path.
+#
+# ## Retention
+#
+# Carry legacy versions for as long as data in them is worth recovering.
+# For per-user contracts (inbox, profile) that is a long time — someone
+# reinstalls after a year and expects their profile back. For epoch-scoped
+# contracts (presence cells) it is meaningless: a cell is superseded every
+# six hours by construction, so a rotated presence contract loses nothing
+# that was not about to expire anyway.
+
+[[contract]]
+name = "presence-cell"
+version = 1
+retired = "2026-08-01"
+reason = """
+Added `encryption_key` to PresenceRecord so a stranger can encrypt a first
+message from a tile alone. A signed-payload change, so it is a contract
+migration whether or not it was intended as one.
+"""
+# No wasm snapshot: this was recognised only after the rebuild, and no
+# tracked copy of the previous binary existed. State in the old cells is
+# unrecoverable. That cost nothing real -- presence cells are epoch-scoped
+# and everything in them was hours from expiring -- but had the same
+# oversight happened to `inbox`, it would have been every message anybody
+# had received. This entry exists so that fact is on the record rather than
+# discovered later.
+wasm = ""
+
+[[contract]]
+name = "inbox"
+version = 1
+retired = ""
+reason = "current"
+wasm = ""
+
+[[contract]]
+name = "profile"
+version = 1
+retired = ""
+reason = "current"
+wasm = ""
+
+[[contract]]
+name = "moderation"
+version = 1
+retired = ""
+reason = "current"
+wasm = ""

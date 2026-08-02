@@ -577,3 +577,117 @@ mod tests {
         assert_eq!(d.envelopes.len(), 1);
     }
 }
+
+/// Fold a retired inbox's contents into a local view of the current one.
+///
+/// # This result must never be published
+///
+/// An envelope's signature covers the **inbox parameters** it was addressed
+/// to (see [`Envelope::signing_payload`]). So mail sealed to a retired
+/// address does not verify at the new one, and pushing a merged state back
+/// to the network is rejected by the contract:
+///
+/// ```text
+/// UPDATE failed: inbox failed verification: signature verification failed
+/// ```
+///
+/// That is not a limitation to work around — it is the binding that stops
+/// anyone lifting an envelope out of one person's inbox and replaying it
+/// into another's. Re-signing is impossible by design: we are the
+/// recipient, not the sender.
+///
+/// # So what migration actually is
+///
+/// Reading, not moving. A client fetches the retired address, decrypts what
+/// it can, and keeps the plaintext in **local storage** — which is already
+/// where the user's own sent messages live, and already authoritative for
+/// history. The network is delivery; the device is the archive.
+///
+/// This function is the merge step of that read. It returns a state to
+/// *display from*, never one to publish.
+///
+/// An earlier version of this comment asserted the opposite — that
+/// envelopes are bound to the recipient's key rather than the contract, so
+/// migrated state would republish cleanly. That was wrong, and no unit test
+/// could have caught it: in-process, nothing checks the parameters. The
+/// network did, immediately.
+#[must_use = "the merged state is for display only and must not be published"]
+pub fn carry_forward(current: &mut InboxState, legacy: &InboxState) -> usize {
+    let before = current.envelopes.len();
+    current.merge(legacy);
+    current.envelopes.len() - before
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn envelope(n: u8, sent: u64) -> Envelope {
+        Envelope {
+            sender_epoch_vk: vec![n; ML_DSA_65_VK_BYTES],
+            epoch: 1,
+            ciphertext: vec![n; 32],
+            sent_ms: sent,
+            sig: vec![n; 64],
+        }
+    }
+
+    #[test]
+    fn carrying_forward_keeps_both_sides() {
+        let mut current = InboxState::default();
+        current.insert(envelope(1, 100));
+
+        let mut legacy = InboxState::default();
+        legacy.insert(envelope(2, 50));
+
+        let added = carry_forward(&mut current, &legacy);
+        assert_eq!(added, 1, "the legacy message should be carried over");
+        assert_eq!(current.envelopes.len(), 2, "and the new one kept");
+    }
+
+    /// Migration must be safe to run repeatedly.
+    ///
+    /// It runs on startup, and startup happens constantly. If a second run
+    /// duplicated messages, every relaunch would inflate the inbox until it
+    /// hit the cap and started evicting real mail.
+    #[test]
+    fn carrying_forward_twice_changes_nothing() {
+        let mut current = InboxState::default();
+        let mut legacy = InboxState::default();
+        legacy.insert(envelope(3, 10));
+
+        carry_forward(&mut current, &legacy);
+        let after_first = current.clone();
+        let added = carry_forward(&mut current, &legacy);
+
+        assert_eq!(added, 0, "a second migration must add nothing");
+        assert_eq!(current, after_first);
+    }
+
+    /// A message already at the new address must survive migration.
+    ///
+    /// The failure this guards against is a migration written as a copy
+    /// rather than a merge: it would silently discard anything that arrived
+    /// at the new address first, which is precisely the mail received
+    /// *since* the upgrade.
+    #[test]
+    fn migration_never_discards_newer_mail() {
+        let mut current = InboxState::default();
+        current.insert(envelope(9, 999));
+        let expected = current.envelopes.clone();
+
+        let mut legacy = InboxState::default();
+        for i in 0..5 {
+            legacy.insert(envelope(i, i as u64));
+        }
+        carry_forward(&mut current, &legacy);
+
+        for (id, env) in expected {
+            assert_eq!(
+                current.envelopes.get(&id),
+                Some(&env),
+                "mail received at the new address was lost in migration"
+            );
+        }
+    }
+}

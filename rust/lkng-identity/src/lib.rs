@@ -1116,3 +1116,69 @@ mod reachability_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod migration_binding_tests {
+    use super::*;
+    use lkng_inbox::{verify::verify_envelope, InboxParams};
+
+    /// The property that makes inbox migration a *read* rather than a *move*.
+    ///
+    /// Proven on mainnet first — an attempt to republish carried-forward
+    /// mail was rejected with `inbox failed verification: signature
+    /// verification failed` — then pinned here so nobody re-derives the
+    /// wrong conclusion by reading the types. An envelope's signature covers
+    /// the inbox parameters it was addressed to, which is what stops anyone
+    /// lifting an envelope out of one person's inbox and replaying it into
+    /// another's.
+    ///
+    /// Consequence, and the reason this test exists rather than a comment:
+    /// migration decrypts a retired address into **local storage**. It
+    /// cannot move mail to the new address, and code that tries will fail
+    /// only on the network, where the failure is expensive to diagnose.
+    #[test]
+    fn mail_from_a_retired_inbox_does_not_verify_at_the_new_one() {
+        let owner = Identity::from_seed([0x4D; 32]);
+        let sender = Identity::from_seed([0x5E; 32]);
+
+        let old = InboxParams::new(owner.for_epoch(1000).verifying_key_bytes());
+        let new = InboxParams::new(owner.for_epoch(1001).verifying_key_bytes());
+
+        let env = sender
+            .seal_message(
+                &owner.for_epoch(1000).encryption_public_key(),
+                &owner.for_epoch(1000).verifying_key_bytes(),
+                1000,
+                b"sent before the upgrade",
+                1,
+            )
+            .unwrap();
+
+        assert!(verify_envelope(&env, &old).is_ok(), "valid where it was sent");
+        assert!(
+            verify_envelope(&env, &new).is_err(),
+            "and not valid at another address — which is why migration reads \
+             into local storage rather than republishing"
+        );
+    }
+
+    /// The recipient can still *read* it, which is the half that matters.
+    #[test]
+    fn a_retired_inbox_is_still_readable_by_its_owner() {
+        let owner = Identity::from_seed([0x4D; 32]);
+        let sender = Identity::from_seed([0x5E; 32]);
+        let env = sender
+            .seal_message(
+                &owner.for_epoch(1000).encryption_public_key(),
+                &owner.for_epoch(1000).verifying_key_bytes(),
+                1000,
+                b"still readable",
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            owner.for_epoch(1000).open_message(&env).unwrap(),
+            b"still readable"
+        );
+    }
+}
