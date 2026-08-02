@@ -386,3 +386,9 @@ main.hidden { display: none; }
 }
 .composer button { border-radius: 999px; padding: 10px 18px; }
 .composer button:disabled { opacity: .45; }
+
+.msg.tap { align-self: center; background: none; color: var(--muted); font-size: 13px; }
+button.secondary {
+  background: #1b1d24; border: 1px solid var(--line); color: inherit;
+}
+button.secondary:disabled { opacity: .45; }

@@ -25,6 +25,60 @@ use lkng_app::Tile;
 use lkng_identity::Identity;
 use lkng_inbox::{Envelope, InboxParams, InboxState};
 
+/// What a sealed payload turned out to be.
+///
+/// # Why taps travel as ordinary envelopes
+///
+/// A tap is the cheapest possible signal — "I noticed you" — and on a
+/// centralised app it is a row in a table the company can read. Here it is
+/// an ECIES-sealed envelope in the recipient's inbox, identical on the wire
+/// to a message. Anyone replicating the inbox sees ciphertext of a
+/// particular size and learns nothing about whether it was a tap, from whom,
+/// or to whom.
+///
+/// That also means taps cost the same as messages and are rate-limited by
+/// the same contract caps, which is the correct incentive: a tap that is
+/// free to send at scale is a spam vector.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Text,
+    Tap,
+}
+
+/// First byte of a sealed payload, naming what follows.
+///
+/// A payload with no recognised marker is treated as plain UTF-8 text —
+/// the format used before taps existed. Keeping that path costs one branch
+/// and means an early message stays readable instead of turning into a
+/// silent decode failure that looks exactly like a delivery bug.
+const MARK_TEXT: u8 = 0x01;
+const MARK_TAP: u8 = 0x02;
+
+/// Encode a payload for sealing.
+pub fn encode_payload(kind: Kind, body: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len() + 1);
+    out.push(match kind {
+        Kind::Text => MARK_TEXT,
+        Kind::Tap => MARK_TAP,
+    });
+    out.extend_from_slice(body.as_bytes());
+    out
+}
+
+/// Decode a payload, tolerating the pre-marker format.
+fn decode_payload(bytes: &[u8]) -> Option<(Kind, String)> {
+    match bytes.first() {
+        Some(&MARK_TEXT) => String::from_utf8(bytes[1..].to_vec())
+            .ok()
+            .map(|s| (Kind::Text, s)),
+        Some(&MARK_TAP) => Some((Kind::Tap, String::new())),
+        // Legacy: the whole payload is the text.
+        _ => String::from_utf8(bytes.to_vec())
+            .ok()
+            .map(|s| (Kind::Text, s)),
+    }
+}
+
 /// One decrypted message, ready to render.
 #[derive(Clone, PartialEq)]
 pub struct Message {
@@ -32,6 +86,7 @@ pub struct Message {
     /// carries, so a message can be matched to a face without either side
     /// revealing a durable identity.
     pub from: [u8; 32],
+    pub kind: Kind,
     pub body: String,
     pub sent_ms: u64,
     /// Whether we sent it. Local-only messages are ours by construction.
@@ -84,11 +139,12 @@ pub fn threads_from_inbox(
         let Ok(plain) = id.open_message(env) else {
             continue;
         };
-        let Ok(body) = String::from_utf8(plain) else {
+        let Some((kind, body)) = decode_payload(&plain) else {
             continue;
         };
         by_peer.entry(from).or_default().push(Message {
             from,
+            kind,
             body,
             sent_ms: env.sent_ms,
             outgoing: false,
@@ -182,6 +238,7 @@ pub fn seal_to_tile(
     id: &Identity,
     tile: &Tile,
     epoch: u64,
+    kind: Kind,
     body: &str,
     now_ms: u64,
 ) -> Result<(Envelope, InboxParams), SendError> {
@@ -190,13 +247,15 @@ pub fn seal_to_tile(
     }
     let enc = tile.encryption_key.ok_or(SendError::NotReachable)?;
 
-    // The tile's epoch verifying key doubles as the recipient's durable
-    // address here: their inbox is addressed by the epoch key they are
-    // currently presenting, which is all a stranger can know about them.
+    // Their inbox is addressed by the *epoch* key their tile is presenting,
+    // because that is the only key we can possibly know. Addressing it by a
+    // durable key fails on the network with "signature verification failed":
+    // the envelope would be bound to one key and the contract to another.
     let recipient_vk = tile_verifying_key(tile).ok_or(SendError::NotReachable)?;
 
+    let payload = encode_payload(kind, body);
     let env = id
-        .seal_message(&enc, &recipient_vk, epoch, body.as_bytes(), now_ms)
+        .seal_message(&enc, &recipient_vk, epoch, &payload, now_ms)
         .map_err(|e| SendError::Seal(e.to_string()))?;
     let params = InboxParams::new(&recipient_vk);
     Ok((env, params))

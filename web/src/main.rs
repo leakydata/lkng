@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b32657";
+pub const BUILD_MARKER: &str = "b32784";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -507,12 +507,13 @@ fn App() -> Element {
 
     let mut tab = use_signal(|| Tab::Browse);
     let mut menu = use_signal(|| false);
-    let mut draft = use_signal(load_draft);
+    let draft = use_signal(load_draft);
     let mut blocked = use_signal(Vec::<[u8; 32]>::new);
     let mut selected = use_signal(|| None::<Tile>);
     let mut open_thread = use_signal(|| None::<[u8; 32]>);
     let mut compose = use_signal(String::new);
     let mut send_error = use_signal(|| None::<String>);
+    let mut tapped = use_signal(|| false);
     let visible: Vec<Tile> = tiles
         .into_iter()
         .filter(|t| !blocked.read().contains(&t.pseudonym))
@@ -539,6 +540,13 @@ fn App() -> Element {
         }
         chat::merge_threads(all)
     };
+
+    // A thread with nothing but taps belongs on the Taps screen, not in
+    // Messages: it is a signal, not a conversation, and mixing them makes
+    // the message list look full of things nobody actually said.
+    let (taps, threads): (Vec<Thread>, Vec<Thread>) = threads
+        .into_iter()
+        .partition(|t| t.messages.iter().all(|m| m.kind == chat::Kind::Tap));
 
     let note = match (&status, live) {
         (Status::Connected, true) => {
@@ -662,12 +670,27 @@ fn App() -> Element {
         if tab() == Tab::Taps {
             main { class: "screen",
                 h2 { class: "screen-h", "Taps" }
-                div { class: "empty",
-                    "Nobody has tapped you yet."
-                    br {}
-                    span { class: "hint",
-                        "A tap is a signed message to your inbox, like any other — "
-                        "so nobody can see who tapped you except you."
+                if taps.is_empty() {
+                    div { class: "empty",
+                        "Nobody has tapped you yet."
+                        br {}
+                        span { class: "hint",
+                            "A tap arrives as an encrypted envelope in your inbox, "
+                            "identical on the wire to a message — so nobody "
+                            "replicating it can tell who tapped whom, including us."
+                        }
+                    }
+                }
+                for th in taps.iter().cloned() {
+                    button {
+                        key: "tap-{hex(&th.peer)}",
+                        class: "thread",
+                        onclick: move |_| { open_thread.set(Some(th.peer)); tab.set(Tab::Messages); },
+                        div { class: "thumb sm", style: "background: {swatch(&th.peer)}" }
+                        div { class: "thread-txt",
+                            div { class: "thread-name", "{th.headline}" }
+                            div { class: "thread-last", "tapped you" }
+                        }
                     }
                 }
             }
@@ -708,8 +731,12 @@ fn App() -> Element {
                                 for (i, m) in t.messages.iter().enumerate() {
                                     div {
                                         key: "{i}",
-                                        class: if m.outgoing { "msg out" } else { "msg in" },
-                                        "{m.body}"
+                                        class: match (m.outgoing, m.kind) {
+                                            (_, chat::Kind::Tap) => "msg tap",
+                                            (true, _) => "msg out",
+                                            (false, _) => "msg in",
+                                        },
+                                        if m.kind == chat::Kind::Tap { "👋 tapped you" } else { "{m.body}" }
                                     }
                                 }
                             }
@@ -735,7 +762,10 @@ fn App() -> Element {
                                         let Some(t) = tile.clone() else { return };
                                         let body = compose.peek().clone();
                                         if body.trim().is_empty() { return }
-                                        match send_message(&node, &me(), &t, cov.epochs[0], &body) {
+                                        match send_message(
+                                            &node, &me(), &t, cov.epochs[0],
+                                            chat::Kind::Text, &body,
+                                        ) {
                                             Ok(()) => {
                                                 compose.set(String::new());
                                                 send_error.set(None);
@@ -812,6 +842,25 @@ fn App() -> Element {
                             },
                             "Message"
                         }
+                        button {
+                            class: "secondary",
+                            disabled: t.encryption_key.is_none() || !live,
+                            onclick: {
+                                let node = node.clone();
+                                let cov = cov.clone();
+                                let t = t.clone();
+                                move |_| {
+                                    match send_message(
+                                        &node, &me(), &t, cov.epochs[0],
+                                        chat::Kind::Tap, "",
+                                    ) {
+                                        Ok(()) => { tapped.set(true); }
+                                        Err(e) => send_error.set(Some(e)),
+                                    }
+                                }
+                            },
+                            if tapped() { "Tapped" } else { "Tap" }
+                        }
                         if !live {
                             p { class: "hint",
                                 "This is a sample profile, not a real person, so it "
@@ -852,6 +901,9 @@ fn App() -> Element {
                     if t == Tab::Messages && !threads.is_empty() {
                         span { class: "pip", "{threads.len()}" }
                     }
+                    if t == Tab::Taps && !taps.is_empty() {
+                        span { class: "pip", "{taps.len()}" }
+                    }
                 }
             }
         }
@@ -891,10 +943,11 @@ fn send_message(
     session: &Session,
     tile: &Tile,
     epoch: u64,
+    kind: chat::Kind,
     body: &str,
 ) -> Result<(), String> {
     let now = now_unix() * 1000;
-    let (env, params) = chat::seal_to_tile(session.identity(), tile, epoch, body, now)
+    let (env, params) = chat::seal_to_tile(session.identity(), tile, epoch, kind, body, now)
         .map_err(|e| e.to_string())?;
 
     let params_bytes = cbor(&params);
