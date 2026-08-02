@@ -1957,3 +1957,28 @@ is not silently "corrected" back later.
 Whether this moves the measured CPU is not yet known — the phone has to pick
 up the new contract first, and saying it will would be exactly the mistake
 made about `summarize_state` an hour ago.
+
+## 2026-08-02 — the CPU is the node's, not the app's
+
+The subscription cut did not move the number either (47–54% across the
+following half hour). Checking *why* produced the useful fact:
+
+**No WebSocket client was connected during any of these measurements.**
+`/proc/net/tcp` shows nothing on the node's port; the app's WebView was not
+running, only the foreground service. The work is spread across ~8
+`freenet-main` tokio workers.
+
+So the ~50% is the node's own behaviour with no client, no user, and a
+dozing device. Neither of our two optimisations could have changed it, and
+describing them as performance fixes would have been wrong — they are
+correct on their own terms and that is all.
+
+This also makes the upstream issue much stronger than "our app is slow". The
+draft is rewritten around the isolated measurement: no client, Doze, 100
+minutes, ~51% mean, non-decaying, `summarize_contract_state` at ~89 calls/s.
+It states plainly what we ruled out on our side, and what is still missing —
+a minimal reproduction against a stock node hosting one trivial contract,
+which is the first thing a maintainer would ask for and which we have not
+built.
+
+Still not filed, for that reason.

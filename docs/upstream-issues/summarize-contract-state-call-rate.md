@@ -1,60 +1,94 @@
-# `summarize_contract_state` is invoked ~89×/second per contract on an idle node
+# Idle node burns ~50% of one CPU core; `summarize_contract_state` called ~89×/s
 
-**Status:** draft, not yet filed. Needs a minimal reproduction against a
-stock node before it is worth anyone's time upstream.
+**Status:** draft, not yet filed. Characterised on one device; a maintainer
+would reasonably want it reproduced on a second before acting.
 
-## What we measured
+## Summary
 
-A phone running an unmodified `freenet-core` node — screen off, device in
-Doze, app in the background, no user activity — sustained **~41% of one CPU
-core** over 30 minutes of five-minute samples (`/proc/<pid>/stat`, utime +
-stime differenced between samples).
+An unmodified `freenet-core` node running on an Android phone consumes
+**~50% of one CPU core, sustained and indefinitely, with no client
+connected**. On a desktop this is invisible. On a phone it is the difference
+between a viable background service and one users uninstall.
 
-The node's own rate-limited logging points at the cause:
+## Measurement
+
+Samsung Galaxy Z Flip 4, Android 16, `aarch64-linux-android`. Node runs as a
+child process of an ordinary app under a foreground service. Sampling is
+passive (`/proc/<pid>/stat`, utime+stime differenced between 5-minute
+samples) so it does not perturb Doze.
+
+Conditions during measurement:
+
+- screen off, device in Doze (`mWakefulness=Dozing`)
+- **no WebSocket client connected** — verified via `/proc/net/tcp`; the app's
+  WebView was not running, only the service
+- device otherwise idle, on charge
+
+Over 100 minutes of 5-minute samples, CPU stayed between **47% and 61% of
+one core**, mean ≈ 51%. It does not decay: the lowest readings are as late
+as the highest.
+
+```text
+00:45   49.3% of one core    rss 371 MB
+00:55   47.8%                rss 325 MB
+01:05   47.2%                rss 326 MB
+01:15   53.9%                rss 340 MB
+```
+
+Work is spread across ~8 `freenet-main` tokio worker threads (15 threads
+total), so it is not one runaway task.
+
+**Memory is fine and was checked separately.** RSS tracks hosted contracts
+and is released: it climbed 275 → 614 MB under heavy contract publishing and
+returned to ~365 MB within 20 minutes of going idle. No ratchet.
+
+## The signal that points somewhere
+
+The node's own rate-limited logging:
 
 ```text
 [RATE LIMIT per-callsite] summarize_contract_state: dropped 1780 in last 30s
                                                    (cumulative: 409369)
 ```
 
-At the documented 30/sec per-callsite cap, 1 780 dropped lines per 30 s
-implies roughly **89 calls per second**, sustained, indefinitely.
+At the 30/sec per-callsite cap, 1 780 dropped lines per 30 s implies
+**~89 calls/second**, sustained, on an idle node with no client. Each call
+enters WASM and deserialises contract state.
 
-## Why that is expensive
+By comparison, over the same period: `peer_connection` 632 log events,
+`process_network_message` 151, `fetch_contract` 6.
 
-`summarize_state` is a WASM entry point. Each call deserialises contract
-state inside the sandbox. For any contract whose state is more than trivial
-— ours holds up to 500 records with a 16 KiB image each — that is megabytes
-of deserialisation per second whose result is discarded except for a set of
-keys.
+## What we ruled out on our side
 
-We reduced our own cost substantially by decoding only the map keys and
-skipping values with `serde::de::IgnoredAny`, which avoids materialising the
-images. That is a fix every contract author would have to discover
-independently, and it does not address the call rate itself.
+- **Our contract's `summarize_state` was needlessly expensive** — it decoded
+  the whole state (up to 500 records with a 16 KiB image each) to collect map
+  keys. We now decode keys and skip values with `serde::de::IgnoredAny`.
+  **This did not measurably change the CPU.**
+- **Subscription count** — we halved our watch set from 18 contracts to 10.
+  **No measurable change**, which is consistent with the app not being
+  connected during measurement.
+- **Client activity** — none. No WebSocket connection existed.
 
-## Questions for maintainers
+## Questions
 
-1. Is ~89 calls/sec/contract on an idle node the intended cadence, or is
-   something re-triggering summarisation in a loop?
-2. Could summaries be cached and invalidated on state change? The state of
-   an idle contract does not change between calls, so almost all of this
-   work is recomputing an identical answer.
-3. If the rate is intended, it is worth documenting prominently that
-   `summarize_state` is the hottest path in a contract and must be O(keys)
-   rather than O(state). We wrote a naive implementation and it was the
-   dominant cost on a phone.
+1. Is ~89 calls/s/node the intended summarisation cadence on an idle node
+   with no client, or is something re-triggering it?
+2. Can summaries be cached and invalidated on state change? An idle
+   contract's state does not change between calls, so nearly all of this
+   work recomputes an identical answer.
+3. If the cadence is intended, it deserves prominent documentation:
+   `summarize_state` is by far the hottest path in a contract and must be
+   O(keys), not O(state). We wrote the obvious implementation and it was
+   costly.
 
-## Why this matters for mobile
+## What would make this a better report
 
-This is the difference between a Freenet node being viable on a phone and
-not. 41% of a core sustained is a background service users uninstall. The
-same node on a desktop would go unnoticed, which is likely why it has not
-surfaced before.
+A minimal reproduction: a stock node hosting one trivial contract, no app,
+CPU sampled the same way. We have not built that yet, and it is the first
+thing a maintainer would ask for.
 
 ## Environment
 
-- `freenet-core`, `fdev` 0.3.278, Rust 1.94.0
-- Samsung Galaxy Z Flip 4, Android 16, aarch64-linux-android
-- Node as a child process of an ordinary app, foreground service
-- Also reproduced on x86_64 Linux (same log signature, CPU cost not isolated)
+- `freenet-core` (unmodified), `fdev` 0.3.278, Rust 1.94.0 (pinned upstream)
+- Android 16, aarch64; also observed the same log signature on x86_64 Linux,
+  where CPU cost was not isolated
