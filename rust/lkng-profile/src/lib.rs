@@ -1406,8 +1406,8 @@ mod photo_tests {
             PhotoRef::new(vec![2; 64], true),
         ]);
         assert_ne!(
-            a.signing_payload(&params).unwrap(),
-            b.signing_payload(&params).unwrap(),
+            a.signing_payload(&params, "sam").unwrap(),
+            b.signing_payload(&params, "sam").unwrap(),
             "which photo is primary must be signed, or it can be swapped"
         );
     }

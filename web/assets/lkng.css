@@ -452,3 +452,27 @@ button.wide { width: 100%; padding: 13px; border-radius: 12px; margin-bottom: 12
 }
 .banner b { font-size: 14px; }
 .banner .row { margin-top: 10px; }
+
+/* ---- profile photo gallery ---- */
+.photo-row {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 6px; margin: 12px 0 8px;
+}
+.photo-cell {
+  position: relative; aspect-ratio: 1; border-radius: 10px;
+  background: #1b1d24; background-size: cover; background-position: center;
+  border: 1px solid var(--line); cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 22px;
+}
+/* The main photo is the one strangers see, so it is marked unmistakably
+   rather than subtly -- a faint highlight on the wrong picture is worse
+   than none. */
+.photo-cell.main { border: 2px solid var(--accent); }
+.photo-tag {
+  position: absolute; left: 4px; bottom: 4px;
+  background: var(--accent); color: #0d0e12;
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 5px;
+}
+.photo-cell.add input { display: none; }

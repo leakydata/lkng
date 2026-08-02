@@ -155,6 +155,21 @@ fn decode_data_url(url: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Prepare a photo for a profile.
+///
+/// Same canvas round trip as everything else here, so EXIF cannot survive.
+/// Sized between a tile thumbnail and an album photo: a profile photo is
+/// fetched by someone who opened your profile deliberately, but it lives in
+/// a contract that peers replicate, so it is capped tighter than an album.
+pub async fn to_profile_photo(blob: &Blob) -> Result<Vec<u8>, PhotoError> {
+    encode_fitted(blob, PROFILE_PX, PROFILE_MAX_BYTES).await
+}
+
+/// Longest edge of a profile photo.
+const PROFILE_PX: u32 = 720;
+/// Matches `lkng_profile::MAX_PHOTO_BYTES`.
+const PROFILE_MAX_BYTES: usize = 96 * 1024;
+
 /// Larger cap for an album photo — see `lkng_album::MAX_PHOTO_BYTES`.
 const ALBUM_MAX_BYTES: usize = 256 * 1024;
 /// Album photos are looked at properly, not as a grid thumbnail.
@@ -171,6 +186,20 @@ const ALBUM_PX: u32 = 1024;
 /// Larger and higher quality than a tile: an album photo is fetched
 /// deliberately by a few people rather than pushed to everyone in a cell.
 pub async fn to_album_photo(blob: &Blob) -> Result<Vec<u8>, PhotoError> {
+    encode_fitted(blob, ALBUM_PX, ALBUM_MAX_BYTES).await
+}
+
+/// Decode, fit inside `max_px`, re-encode stepping quality down until the
+/// result fits `max_bytes`.
+///
+/// Shared by profile and album photos so there is one place that strips
+/// metadata and one place that enforces a size ceiling. Two near-identical
+/// copies is how one of them quietly stops stripping EXIF.
+async fn encode_fitted(
+    blob: &Blob,
+    max_px: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, PhotoError> {
     let url = Url::create_object_url_with_blob(blob).map_err(|_| PhotoError::Decode)?;
     let img = HtmlImageElement::new().map_err(|_| PhotoError::Decode)?;
     img.set_src(&url);
@@ -185,7 +214,7 @@ pub async fn to_album_photo(blob: &Blob) -> Result<Vec<u8>, PhotoError> {
 
     // Fit inside a square bound, preserving aspect: an album photo is looked
     // at, so cropping it to a square would throw away what it is of.
-    let scale = (ALBUM_PX as f64 / w.max(h) as f64).min(1.0);
+    let scale = (max_px as f64 / w.max(h) as f64).min(1.0);
     let (dw, dh) = (((w as f64) * scale) as u32, ((h as f64) * scale) as u32);
 
     let doc = web_sys::window().and_then(|w| w.document()).ok_or(PhotoError::Encode)?;
@@ -214,7 +243,7 @@ pub async fn to_album_photo(blob: &Blob) -> Result<Vec<u8>, PhotoError> {
             .map_err(|_| PhotoError::Encode)?;
         let bytes = decode_data_url(&data_url).ok_or(PhotoError::Encode)?;
         last = bytes.len();
-        if bytes.len() <= ALBUM_MAX_BYTES {
+        if bytes.len() <= max_bytes {
             return Ok(bytes);
         }
     }

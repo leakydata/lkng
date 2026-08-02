@@ -2297,6 +2297,7 @@ dependencies = [
  "lkng-location",
  "lkng-moderation",
  "lkng-presence",
+ "lkng-profile",
  "serde",
  "serde_json",
  "wasm-bindgen",

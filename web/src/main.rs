@@ -528,7 +528,39 @@ struct Draft {
     position: u8,
     gender: String,
     hiv_status: String,
+    /// The 256px tile image, derived from whichever photo is primary.
+    ///
+    /// Kept separate from `photos` rather than computed on demand: it is
+    /// what goes in the presence tile, it is capped far smaller than a
+    /// profile photo, and re-deriving it every render would re-encode an
+    /// image on the UI thread for no reason.
     thumbnail: Vec<u8>,
+    /// Profile photos, in the order the user added them.
+    #[serde(default)]
+    photos: Vec<Vec<u8>>,
+    /// Index into `photos` of the main photo — the one shown in the grid
+    /// and at the top of the profile.
+    ///
+    /// An index rather than a flag on each photo, so "exactly one primary"
+    /// is true by construction in the draft. The published `ProfileBody`
+    /// uses a per-photo flag because that is its wire format, and the
+    /// conversion is the only place the two representations meet.
+    #[serde(default)]
+    primary: usize,
+}
+
+impl Draft {
+    /// The primary photo, if there is one.
+    ///
+    /// Clamps rather than panics: `primary` comes from stored JSON, so it is
+    /// input. A stale index after deleting a photo would otherwise take the
+    /// whole editor down.
+    fn primary_photo(&self) -> Option<&Vec<u8>> {
+        if self.photos.is_empty() {
+            return None;
+        }
+        self.photos.get(self.primary.min(self.photos.len() - 1))
+    }
 }
 
 const DRAFT_KEY: &str = "lkng.profile.draft.v1";
@@ -2007,6 +2039,19 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
+/// Re-derive the 256 px tile image from a profile photo.
+///
+/// Used when the user changes which photo is primary. It re-encodes rather
+/// than reusing the stored profile photo directly, because the tile has a
+/// 16 KiB cap that a 96 KiB profile photo would blow straight past — and
+/// that cap is what every phone in the cell pays.
+async fn rethumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
+    let arr = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::of1(&arr.buffer());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts).ok()?;
+    photo::to_thumbnail(&blob).await.ok()
+}
+
 /// Background for a tile: their photo if they published one, otherwise a
 /// deterministic swatch.
 ///
@@ -2119,15 +2164,40 @@ fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
             let arr = js_sys::Uint8Array::from(&bytes[..]);
             let parts = js_sys::Array::of1(&arr.buffer());
             match web_sys::Blob::new_with_u8_array_sequence(&parts) {
-                Ok(blob) => match photo::to_thumbnail(&blob).await {
-                    Ok(thumb) => {
-                        let n = thumb.len();
-                        draft.write().thumbnail = thumb;
-                        save_draft(&draft.read());
-                        status.set(format!("photo ready ({n} bytes, location data removed)"));
+                Ok(blob) => {
+                    // Two encodings of the same image, deliberately: a
+                    // profile-sized one to look at, and a 256px tile image
+                    // that every phone in the cell downloads. Deriving the
+                    // tile from the profile photo rather than uploading
+                    // twice keeps them the same picture.
+                    match photo::to_profile_photo(&blob).await {
+                        Ok(full) => match photo::to_thumbnail(&blob).await {
+                            Ok(thumb) => {
+                                let was_empty = draft.peek().photos.is_empty();
+                                let n = full.len();
+                                {
+                                    let mut d = draft.write();
+                                    d.photos.push(full);
+                                    // First photo becomes main. After that,
+                                    // added photos do NOT silently take over
+                                    // the grid image -- changing the face
+                                    // strangers see should be a decision.
+                                    if was_empty {
+                                        d.primary = 0;
+                                        d.thumbnail = thumb;
+                                    }
+                                }
+                                let snapshot = draft.read().clone();
+                                save_draft(&snapshot);
+                                status.set(format!(
+                                    "added ({n} bytes, location data removed)"
+                                ));
+                            }
+                            Err(e) => status.set(e.to_string()),
+                        },
+                        Err(e) => status.set(e.to_string()),
                     }
-                    Err(e) => status.set(e.to_string()),
-                },
+                }
                 Err(_) => status.set("could not read that image".into()),
             }
             busy.set(false);
@@ -2171,14 +2241,85 @@ fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
             }
 
             div { class: "form",
-                label { class: "photo-pick", style: "{thumb_style}",
-                    input {
-                        r#type: "file",
-                        accept: "image/*",
-                        onchange: pick_photo,
+                div { class: "photo-row",
+                    for (i, p) in draft.read().photos.iter().enumerate() {
+                        button {
+                            key: "ph-{i}",
+                            class: if i == draft.read().primary.min(
+                                draft.read().photos.len().saturating_sub(1)
+                            ) { "photo-cell main" } else { "photo-cell" },
+                            style: "background-image:url(data:image/webp;base64,{b64(p)})",
+                            onclick: move |_| {
+                                draft.write().primary = i;
+                                let d = draft.read().clone();
+                                save_draft(&d);
+                                // Re-derive the tile image from the new
+                                // primary. Without this the grid keeps
+                                // showing the old face while the profile
+                                // shows the new one -- and the grid is the
+                                // one strangers see.
+                                // Clone out before awaiting: holding a read
+                                // guard across the await would still be
+                                // borrowed when the write below runs.
+                                let bytes = draft.peek().primary_photo().cloned();
+                                spawn(async move {
+                                    let Some(bytes) = bytes else { return };
+                                    if let Some(t) = rethumbnail(&bytes).await {
+                                        draft.write().thumbnail = t;
+                                        let d = draft.read().clone();
+                                        save_draft(&d);
+                                    }
+                                });
+                            },
+                            if i == draft.read().primary.min(
+                                draft.read().photos.len().saturating_sub(1)
+                            ) {
+                                span { class: "photo-tag", "Main" }
+                            }
+                        }
                     }
-                    if draft.read().thumbnail.is_empty() {
-                        span { "Add a photo" }
+
+                    if draft.read().photos.len() < lkng_profile::MAX_PHOTOS {
+                        label { class: "photo-cell add",
+                            input {
+                                r#type: "file",
+                                accept: "image/*",
+                                onchange: pick_photo,
+                            }
+                            span { "+" }
+                        }
+                    }
+                }
+                p { class: "hint",
+                    if draft.read().photos.is_empty() {
+                        "Add a photo. The first one becomes your main photo — the "
+                        "one people see in the grid."
+                    } else {
+                        "Tap a photo to make it your main one. That is the photo "
+                        "strangers see in the grid, so it is the only one that is "
+                        "public before you message anyone."
+                    }
+                }
+                if !draft.read().photos.is_empty() {
+                    button {
+                        class: "linkish",
+                        onclick: move |_| {
+                            let mut d = draft.write();
+                            let idx = d.primary.min(d.photos.len().saturating_sub(1));
+                            d.photos.remove(idx);
+                            // Primary follows the list, not the index: after
+                            // removing the main photo the next one becomes
+                            // main, rather than the index silently pointing
+                            // at a different face.
+                            d.primary = 0;
+                            if d.photos.is_empty() {
+                                d.thumbnail.clear();
+                            }
+                            let snapshot = d.clone();
+                            drop(d);
+                            save_draft(&snapshot);
+                        },
+                        "Remove main photo"
                     }
                 }
                 p { class: "hint",
