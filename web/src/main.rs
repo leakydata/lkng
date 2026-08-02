@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b85800";
+pub const BUILD_MARKER: &str = "b86202";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -879,7 +879,13 @@ fn App() -> Element {
     let mut tab = use_signal(|| Tab::Browse);
     let mut menu = use_signal(|| false);
     let draft = use_signal(load_draft);
-    let mut blocked = use_signal(Vec::<[u8; 32]>::new);
+    // Blocks live in the address book, which persists. They were an
+    // in-memory Vec until 2026-08-02: someone could block a person who was
+    // harassing them, close the app, and find them back in the grid — with
+    // the app having shown a Block button that did something temporary and
+    // said nothing about it. Of everything that could quietly not persist,
+    // this is the worst candidate.
+    let mut blocked = use_signal(|| load_blocks());
     let mut selected = use_signal(|| None::<Tile>);
     let mut open_thread = use_signal(|| None::<[u8; 32]>);
     let mut compose = use_signal(String::new);
@@ -1622,6 +1628,7 @@ fn App() -> Element {
                             class: "danger",
                             onclick: move |_| {
                                 blocked.write().push(t.pseudonym);
+                                save_blocks(&blocked.read());
                                 selected.set(None);
                             },
                             "Block"
@@ -1719,6 +1726,7 @@ fn App() -> Element {
                                 class: "danger",
                                 onclick: move |_| {
                                     blocked.write().push(subject);
+                                    save_blocks(&blocked.read());
                                     reporting.set(None);
                                     selected.set(None);
                                 },
@@ -2250,6 +2258,23 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
+/// Blocked pseudonyms, from the persisted address book.
+///
+/// Kept as a plain `Vec` in the UI because that is what the render path
+/// wants, but written through the address book so it survives a restart and
+/// travels inside the encrypted backup.
+fn load_blocks() -> Vec<[u8; 32]> {
+    load_book().blocked()
+}
+
+fn save_blocks(list: &[[u8; 32]]) {
+    let mut book = load_book();
+    // Union, never replace: a block added on another device or before a
+    // restore must not be dropped because this list did not know about it.
+    book.extend_blocks(list.iter().copied());
+    save_book(&book);
+}
+
 /// Storage key for the address book — favourites, notes, blocks.
 const BOOK_KEY: &str = "lkng.book.v1";
 
@@ -2261,19 +2286,62 @@ const BOOK_KEY: &str = "lkng.book.v1";
 /// them. Grindr keeps that on a server; here it is in local storage or
 /// nowhere, and the backup file is the only way it travels.
 fn load_book() -> lkng_app::AddressBook {
-    web_sys::window()
+    let Some(raw) = web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
         .and_then(|s| s.get_item(BOOK_KEY).ok().flatten())
-        .and_then(|j| serde_json::from_str(&j).ok())
+    else {
+        return Default::default();
+    };
+    decode_b64(&raw)
+        .and_then(|b| ciborium::de::from_reader(&b[..]).ok())
         .unwrap_or_default()
 }
 
+/// Persist the address book as **CBOR**, not JSON.
+///
+/// Blocks are keyed by `[u8; 32]` and favourites by `Vec<u8>`, and JSON map
+/// keys must be strings — so `serde_json::to_string` *fails* on this type.
+/// The first version of this function wrote JSON behind an `if let Ok(...)`,
+/// so every save silently stored nothing and favourites, notes and blocks
+/// were lost on every reload while the UI showed them working.
+///
+/// A unit test in `lkng-app` asserts the JSON attempt fails, so this cannot
+/// quietly regress.
 fn save_book(book: &lkng_app::AddressBook) {
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        if let Ok(j) = serde_json::to_string(book) {
-            let _ = s.set_item(BOOK_KEY, &j);
+    let Some(store) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
+        return;
+    };
+    let mut buf = Vec::new();
+    if ciborium::ser::into_writer(book, &mut buf).is_ok() {
+        let _ = store.set_item(BOOK_KEY, &b64(&buf));
+    }
+}
+
+/// Decode arbitrary-length standard base64.
+fn decode_b64(s: &str) -> Option<Vec<u8>> {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut vals = Vec::with_capacity(s.len());
+    for ch in s.bytes() {
+        if ch == b'=' {
+            break;
+        }
+        vals.push(T.iter().position(|&t| t == ch)? as u32);
+    }
+    let mut out = Vec::with_capacity(vals.len() * 3 / 4);
+    for c in vals.chunks(4) {
+        let mut n = 0u32;
+        for (i, v) in c.iter().enumerate() {
+            n |= v << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if c.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if c.len() > 3 {
+            out.push(n as u8);
         }
     }
+    Some(out)
 }
 
 /// Fetch someone's profile, given the verifying key from their tile.

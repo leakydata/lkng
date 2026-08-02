@@ -1047,6 +1047,42 @@ impl AddressBook {
     }
 
     /// Favourites, newest first.
+    /// Block a pseudonym, persistently.
+    ///
+    /// The address book is the persisted half of the app, so blocks belong
+    /// here rather than only on `Session` — which lives for one run. The
+    /// `blocked` field existed from the start with no way to read or write
+    /// it, so the UI kept its own in-memory list and blocks silently
+    /// evaporated on restart.
+    pub fn block(&mut self, pseudonym: [u8; 32]) {
+        self.blocked.insert(pseudonym, ());
+    }
+
+    pub fn unblock(&mut self, pseudonym: &[u8; 32]) {
+        self.blocked.remove(pseudonym);
+    }
+
+    pub fn is_blocked(&self, pseudonym: &[u8; 32]) -> bool {
+        self.blocked.contains_key(pseudonym)
+    }
+
+    /// Every blocked pseudonym, sorted so the list is stable across runs.
+    pub fn blocked(&self) -> Vec<[u8; 32]> {
+        self.blocked.keys().copied().collect()
+    }
+
+    /// Merge a list of blocks in, keeping anything already blocked.
+    ///
+    /// A union rather than a replacement: restoring a backup must not
+    /// un-block someone blocked since that backup was made. Getting this
+    /// backwards would silently undo a safety decision at the exact moment
+    /// a user is recovering their account.
+    pub fn extend_blocks(&mut self, list: impl IntoIterator<Item = [u8; 32]>) {
+        for p in list {
+            self.blocked.insert(p, ());
+        }
+    }
+
     pub fn favourites(&self) -> Vec<(&Vec<u8>, &Favourite)> {
         let mut v: Vec<_> = self.favourites.iter().collect();
         v.sort_by(|a, b| b.1.added_ms.cmp(&a.1.added_ms).then(a.0.cmp(b.0)));
@@ -1525,5 +1561,72 @@ mod grid_filter_ui_tests {
         ]);
         assert_eq!(kept.len(), 1, "only the tile matching every criterion survives");
         assert_eq!(kept[0].headline, "match");
+    }
+}
+
+#[cfg(test)]
+mod book_block_tests {
+    use super::*;
+
+    /// The address book must survive the round trip its persistence uses.
+    ///
+    /// It is **CBOR, not JSON**, and that is load-bearing rather than taste:
+    /// blocks are keyed by `[u8; 32]` and favourites by `Vec<u8>`, and JSON
+    /// map keys must be strings. `serde_json::to_string` therefore *fails*
+    /// on this type — and a persistence layer that ignores a serialisation
+    /// error saves nothing while looking like it worked. Which is exactly
+    /// what shipped for an hour.
+    #[test]
+    fn the_address_book_round_trips_through_cbor() {
+        let mut b = AddressBook::default();
+        b.block([1; 32]);
+        b.block([2; 32]);
+        b.favourite(&[7u8; 8], "sam", 100).unwrap();
+        b.set_note(&[7u8; 8], "met at the bar").unwrap();
+
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&b, &mut buf).expect("cbor encode");
+        let back: AddressBook = ciborium::de::from_reader(&buf[..]).expect("cbor decode");
+
+        assert!(back.is_blocked(&[1; 32]));
+        assert!(back.is_blocked(&[2; 32]));
+        assert_eq!(back.note(&[7u8; 8]), Some("met at the bar"));
+        assert_eq!(back.favourites().len(), 1);
+    }
+
+    /// The reason CBOR is required, pinned so nobody "simplifies" it back.
+    #[test]
+    fn json_cannot_represent_this_type_at_all() {
+        let mut b = AddressBook::default();
+        b.block([1; 32]);
+        assert!(
+            serde_json::to_string(&b).is_err(),
+            "if this ever succeeds, JSON gained non-string map keys and the \
+             comment above is stale — but until then, saving as JSON silently \
+             stores nothing"
+        );
+    }
+
+    /// Restoring a backup must never un-block someone.
+    ///
+    /// A replace-instead-of-union here would undo a safety decision at the
+    /// exact moment someone is recovering their account onto a new phone —
+    /// the worst possible time to silently re-admit a person they blocked.
+    #[test]
+    fn merging_blocks_never_removes_one() {
+        let mut b = AddressBook::default();
+        b.block([9; 32]);
+        b.extend_blocks([[1; 32], [2; 32]]);
+        assert!(b.is_blocked(&[9; 32]), "the pre-existing block must survive");
+        assert_eq!(b.blocked().len(), 3);
+    }
+
+    #[test]
+    fn unblocking_removes_only_that_one() {
+        let mut b = AddressBook::default();
+        b.extend_blocks([[1; 32], [2; 32]]);
+        b.unblock(&[1; 32]);
+        assert!(!b.is_blocked(&[1; 32]));
+        assert!(b.is_blocked(&[2; 32]));
     }
 }

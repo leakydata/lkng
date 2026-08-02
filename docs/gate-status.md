@@ -2363,3 +2363,41 @@ Two things the copy says out loud, because both are choices:
   A filter that sweeps in non-answers lies to the person filtering, and puts
   the people who withheld information in front of exactly the audience that
   filtered for it. Tested.
+
+## 2026-08-02 — the audit, and a bug I shipped an hour earlier
+
+Rather than keep finding unwired libraries one per iteration, I diffed every
+public API in the workspace against what the app calls. It surfaced the
+worst one so far.
+
+**Blocks did not persist.** The UI kept blocked pseudonyms in an in-memory
+`use_signal(Vec<...>)`. Someone could block a person harassing them, close
+the app, and find them back in the grid — with a Block button that had
+looked like it worked. `AddressBook` has had a `blocked` field since the
+beginning with **no accessors at all**, which is why nothing used it.
+
+Blocks now live in the address book, and merging is a **union, never a
+replacement**: restoring a backup must not un-block someone blocked since
+that backup was made. Getting that backwards would silently undo a safety
+decision at the exact moment a user is recovering onto a new phone.
+
+**And the test found a bug I had shipped an hour before.** `AddressBook` is
+keyed by `[u8; 32]` and `Vec<u8>`; JSON map keys must be strings, so
+`serde_json::to_string` *fails* on this type. My `save_book` wrote JSON
+behind an `if let Ok(...)` — so every save silently stored nothing, and
+favourites and notes were lost on every reload while the UI displayed them
+working perfectly.
+
+That is the same failure mode this log has been cataloguing all session, and
+this time I wrote it. Persistence is now CBOR, and a test asserts the JSON
+attempt **fails**, so nobody can "simplify" it back:
+
+```rust
+assert!(serde_json::to_string(&b).is_err(),
+        "...saving as JSON silently stores nothing");
+```
+
+The lesson holds in both directions: the audit found the block bug because I
+went looking systematically, and the block bug's test found the persistence
+bug because it round-tripped through the real path instead of asserting on a
+value in memory.
