@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b34857";
+pub const BUILD_MARKER: &str = "b35335";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -968,7 +968,7 @@ fn App() -> Element {
                         key: "{hex(&th.peer)}",
                         class: "thread",
                         onclick: move |_| open_thread.set(Some(th.peer)),
-                        div { class: "thumb sm", style: "background: {swatch(&th.peer)}" }
+                        div { class: "thumb sm", style: "{peer_art(&th.peer, &visible)}" }
                         div { class: "thread-txt",
                             div { class: "thread-name", "{th.headline}" }
                             div { class: "thread-last",
@@ -999,7 +999,7 @@ fn App() -> Element {
                         key: "tap-{hex(&th.peer)}",
                         class: "thread",
                         onclick: move |_| { open_thread.set(Some(th.peer)); tab.set(Tab::Messages); },
-                        div { class: "thumb sm", style: "background: {swatch(&th.peer)}" }
+                        div { class: "thumb sm", style: "{peer_art(&th.peer, &visible)}" }
                         div { class: "thread-txt",
                             div { class: "thread-name", "{th.headline}" }
                             div { class: "thread-last", "tapped you" }
@@ -1124,7 +1124,7 @@ fn App() -> Element {
         if let Some(t) = selected() {
             div { class: "sheet-backdrop", onclick: move |_| selected.set(None),
                 div { class: "sheet", onclick: move |e| e.stop_propagation(),
-                    div { class: "sheet-thumb", style: "background: {swatch(&t.pseudonym)}" }
+                    div { class: "sheet-thumb", style: "{tile_art(&t)}" }
                     h2 { "{t.headline}" }
                     p { class: "meta",
                         if t.same_cell { "In your area" } else { "Next area over" }
@@ -1467,7 +1467,7 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
         button {
             class: "tile",
             onclick: move |_| onopen.call(t.clone()),
-            div { class: "thumb", style: "background: {swatch(&tile.pseudonym)}" }
+            div { class: "thumb", style: "{tile_art(&tile)}" }
             div { class: "overlay",
                 div { class: "headline", "{tile.headline}" }
                 if !tile.same_cell {
@@ -1478,9 +1478,45 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
-/// Placeholder tile art derived from the pseudonym, so the grid reads as a
-/// grid before photo support lands. Deterministic per pseudonym, and it
-/// changes when the pseudonym rotates — which is the honest behaviour.
+/// Background for a tile: their photo if they published one, otherwise a
+/// deterministic swatch.
+///
+/// The fallback is not decoration. A grid of empty boxes reads as broken,
+/// and a grid where the photo-less are invisible quietly punishes people who
+/// have not uploaded one — including everybody on their first run.
+///
+/// The image is a `data:` URL built from bytes that were verified as part of
+/// the record signature, so there is no request to any third party: rendering
+/// the grid contacts nothing, and cannot be turned into a beacon by whoever
+/// supplied the photo.
+fn tile_art(tile: &Tile) -> String {
+    if tile.thumbnail.is_empty() {
+        swatch(&tile.pseudonym)
+    } else {
+        format!(
+            "background-image:url(data:image/webp;base64,{});background-size:cover;\
+             background-position:center",
+            b64(&tile.thumbnail)
+        )
+    }
+}
+
+/// Art for a pseudonym we may or may not still have a tile for.
+///
+/// Falls back to the swatch when the person has left the grid — which
+/// happens routinely, since tiles expire and pseudonyms rotate every six
+/// hours. A conversation must keep rendering after that: losing the picture
+/// is expected, losing the thread would be a bug.
+fn peer_art(peer: &[u8; 32], tiles: &[Tile]) -> String {
+    match tiles.iter().find(|t| &t.pseudonym == peer) {
+        Some(t) => tile_art(t),
+        None => swatch(peer),
+    }
+}
+
+/// Placeholder tile art derived from the pseudonym. Deterministic per
+/// pseudonym, and it changes when the pseudonym rotates — which is the
+/// honest behaviour.
 fn swatch(pseudonym: &[u8; 32]) -> String {
     // u32, not u16: 255 * 360 = 91_800 overflows a u16, which panics in
     // debug and silently wraps in release — the worst kind of difference.

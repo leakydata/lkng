@@ -1499,3 +1499,31 @@ demonstrates content-id dedup — a replayed report is not a second report.
 
 Written before trusting the path, on the principle the day established: two
 write paths tonight were broken in ways reading them could not reveal.
+
+## 2026-08-01 — photos were captured, published, and never shown
+
+Third instance of the same shape as the presence bug, found the same way —
+by asking what a feature actually does end to end rather than whether its
+pieces exist.
+
+Photos were: chosen, canvas-re-encoded (so EXIF and GPS cannot survive),
+size-laddered under 16 KiB, signed into the presence record, and published
+to the cell. Every one of those worked. `Tile::thumbnail` then reached the
+UI and **nothing rendered it** — `TileCard` drew `swatch(pseudonym)`, a
+deterministic gradient written as a placeholder "before photo support
+lands". Photo support had landed; the placeholder stayed.
+
+So the whole grid was gradients, and a user who added a photo saw it only on
+their own avatar. The bytes were on the network the entire time.
+
+Now `tile_art` renders the published thumbnail as a `data:` URL, falling
+back to the swatch when there is none. The fallback is deliberate rather
+than lazy: a grid of empty boxes reads as broken, and a grid where
+photo-less people are invisible quietly punishes everyone on their first
+run. `peer_art` does the same for conversations, falling back when a tile
+has expired — losing the picture after six hours is expected, losing the
+thread would be a bug.
+
+A `data:` URL also means rendering the grid makes no third-party request,
+so a supplied photo cannot be turned into a beacon that reports who viewed
+whom.
