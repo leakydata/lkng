@@ -194,7 +194,28 @@ class MainActivity : AppCompatActivity() {
      * slow, cold, or busy takes longer than any constant you would pick.
      */
     private fun loadWhenNodeReady(attempt: Int = 0) {
-        val url = "http://127.0.0.1:${NodeService.WS_PORT}/v1/contract/web/$UI_CONTRACT/"
+        // `?__sandbox=1` loads the app **directly**, not the node's wrapper
+        // page.
+        //
+        // The wrapper embeds the app in an iframe whose sandbox attribute is
+        // `allow-scripts allow-forms allow-popups allow-downloads
+        // allow-modals` — with no `allow-same-origin`. That makes the frame
+        // an *opaque origin*, and an opaque origin cannot:
+        //
+        //   * use `localStorage` — every write throws, so the identity seed,
+        //     profile draft, photos, favourites, notes, blocks and the
+        //     hand-set location were all discarded on every load;
+        //   * reach `addJavascriptInterface` bridges, which are bound to the
+        //     top frame — so `LkngVault` and `LkngLocation` did not exist,
+        //     and the app correctly reported "location is unavailable".
+        //
+        // Which is exactly what the user saw: a location that would not stick
+        // and a permanent sample area. The sandbox is the right default for a
+        // node serving *someone else's* app to a browser. Here the WebView is
+        // already the sandbox, the app is ours, and the frame was isolating
+        // it from its own storage and its own device.
+        val url =
+            "http://127.0.0.1:${NodeService.WS_PORT}/v1/contract/web/$UI_CONTRACT/?__sandbox=1"
         Thread {
             val ready = try {
                 (java.net.URL(url).openConnection() as java.net.HttpURLConnection).run {

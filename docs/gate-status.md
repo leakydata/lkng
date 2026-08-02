@@ -2464,3 +2464,46 @@ picker grants read access to the single chosen file. Asking for
 `READ_MEDIA_IMAGES` to upload one photo would mean requesting the entire
 gallery to read one file, from an app whose argument is that it takes only
 what it needs.
+
+## 2026-08-02 — the app was running in an opaque origin
+
+The user: *"When I set location it is not retained, I just see 'Connected,
+but location is unavailable, so this is a sample area.'"*
+
+Two symptoms, one cause, and it invalidates a great deal of what this log has
+recorded as working.
+
+`MainActivity` loaded the node's **wrapper page**, which embeds the app in an
+iframe with:
+
+```html
+sandbox="allow-scripts allow-forms allow-popups allow-downloads allow-modals"
+```
+
+No `allow-same-origin`. That makes the frame an **opaque origin**, and an
+opaque origin cannot:
+
+- **use `localStorage`** — every write throws. The identity seed, profile
+  draft, photos, favourites, notes, blocks, the age-gate flag and the
+  hand-set location were *all* discarded on every single load;
+- **reach `addJavascriptInterface` bridges**, which bind to the top frame.
+  `LkngVault` and `LkngLocation` simply did not exist, so the app fell back
+  to web storage for the identity seed — which also could not persist — and
+  correctly reported "location is unavailable".
+
+So the phone generated a **fresh identity on every page load**, and the
+Keystore vault this log describes as "CONFIRMED on device" was never reached
+from the WebView at all. That confirmation came from a Kotlin-only self-test,
+which proved the vault worked and not that the app could use it.
+
+**Fixed** by loading `?__sandbox=1` directly, so the app runs in the top
+frame at a real origin. The wrapper's sandbox is the right default for a node
+serving *someone else's* app to a browser; here the WebView is already the
+sandbox, the app is ours, and the frame was isolating it from its own storage
+and its own device.
+
+The pattern, one more time and at its most expensive: everything I verified
+was real, and none of it was verified **through the path a user takes**. Unit
+tests, mainnet round trips, contract signatures, EXIF stripping — all true,
+all bypassing the WebView. The user found this in three sentences by using
+the app.
