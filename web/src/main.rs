@@ -267,6 +267,17 @@ fn coverage_for(s: &Session) -> (Coverage, Fix) {
     (cov, fix)
 }
 
+/// Parameters of our own inbox contract.
+///
+/// Addressed by the **durable** verifying key, not an epoch subkey — an
+/// inbox that moved every six hours would strand messages sent minutes
+/// before the rollover, and there is no server to forward them. The address
+/// is a hash of the key (see `lkng_inbox::address_of`), so publishing it
+/// does not publish the key itself.
+fn my_inbox_params(session: &Session) -> InboxParams {
+    InboxParams::new(session.identity().verifying_key_bytes())
+}
+
 fn cbor(v: &impl serde::Serialize) -> Vec<u8> {
     let mut b = Vec::new();
     ciborium::ser::into_writer(v, &mut b).expect("cbor");
