@@ -32,14 +32,28 @@ ROOT="$PWD"
 OUT="$ROOT/web/target/dx/lkng-web/release/web/public"
 MARKER="b$(( $(date +%s) % 100000 ))"
 
-# Stamp the marker. Kept on one line and matched anchored, so the sed cannot
-# quietly match nothing -- which is the failure mode this whole script exists
-# to prevent.
+# Stamp the marker.
+#
+# Done in python, not sed: the line contains `&str`, and `&` in a sed
+# replacement means "the entire match", so `sed` spliced the old line back
+# into itself and produced code that would not parse. Caught only because the
+# release build failed loudly -- had the marker been in a string that still
+# compiled, this script would have gone on certifying builds while quietly
+# corrupting the file it was checking.
 MARKER_LINE='pub const BUILD_MARKER: &str = '
 grep -q "^$MARKER_LINE" web/src/main.rs \
   || { echo "FAIL: BUILD_MARKER declaration not found in web/src/main.rs" >&2; exit 1; }
-sed -i "s|^${MARKER_LINE}.*|${MARKER_LINE}\"${MARKER}\";|" web/src/main.rs
-grep -q "\"$MARKER\"" web/src/main.rs \
+python3 - "$MARKER" <<'PY'
+import re, sys
+marker = sys.argv[1]
+p = 'web/src/main.rs'
+s = open(p).read()
+s, n = re.subn(r'^pub const BUILD_MARKER:.*$',
+               f'pub const BUILD_MARKER: &str = "{marker}";', s, count=1, flags=re.M)
+assert n == 1, "marker stamp did not apply"
+open(p, 'w').write(s)
+PY
+grep -q "\"$MARKER\";" web/src/main.rs \
   || { echo "FAIL: marker stamp did not apply" >&2; exit 1; }
 
 echo "==> building UI (marker $MARKER)"

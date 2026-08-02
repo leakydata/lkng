@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b30363";
+pub const BUILD_MARKER: &str = "b31850";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -764,10 +764,18 @@ fn App() -> Element {
                     div { class: "actions",
                         button {
                             class: "primary",
-                            // No encryption key on their tile means no way to
-                            // reach them. Disabled rather than hidden, so the
-                            // reason can be said out loud below.
-                            disabled: t.encryption_key.is_none(),
+                            // Two separate reasons to refuse, both real:
+                            //
+                            // 1. no encryption key on their tile — nothing to
+                            //    seal to;
+                            // 2. this is a *sample* tile. Sample identities
+                            //    are derived from constant seeds compiled into
+                            //    this binary, so their private keys are known
+                            //    to anyone with the source. Sealing a message
+                            //    to one would look like encryption and be
+                            //    publicly readable — worse than refusing,
+                            //    because the user would believe it was private.
+                            disabled: t.encryption_key.is_none() || !live,
                             onclick: move |_| {
                                 open_thread.set(Some(t.pseudonym));
                                 tab.set(Tab::Messages);
@@ -775,7 +783,12 @@ fn App() -> Element {
                             },
                             "Message"
                         }
-                        if t.encryption_key.is_none() {
+                        if !live {
+                            p { class: "hint",
+                                "This is a sample profile, not a real person, so it "
+                                "can't be messaged."
+                            }
+                        } else if t.encryption_key.is_none() {
                             p { class: "hint",
                                 "Their app is an older version that can't receive "
                                 "encrypted messages yet."
