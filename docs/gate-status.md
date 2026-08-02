@@ -2066,3 +2066,38 @@ Not a user-facing problem: a real install has one client and does not run
 `fdev` fifteen times an evening. But it is a real hazard for anyone
 *developing* on Freenet, and worth knowing before spending an hour
 diagnosing "the network" when the answer is a leaked socket.
+
+## 2026-08-02 — a correction, and a better measurement
+
+**Correction.** I recorded that "a node restart loses its hosted contracts",
+having seen a restarted node at 4 MB and 0% CPU. That was wrong: the node had
+not started at all. `pgrep -f 'freenet network'` was matching my own shell
+command line, so a dead node looked like a live idle one. Contracts persist
+fine — a correctly restarted node loads them eagerly and reaches ~900 MB RSS
+within 31 seconds.
+
+Nearly published a false finding on the strength of a pattern that matched
+the wrong process. The tell was there — 4 MB is not a running Freenet node —
+and I read it as evidence instead of as an implausibility.
+
+**The corrected measurement is more useful than the wrong one:**
+
+| node state | CPU | RSS |
+| --- | --- | --- |
+| empty data dir, 0 contracts | 0.4% | 42 MB |
+| same contracts, 2 min after restart | 7.1% | 1 040 MB |
+| same contracts, 5 h uptime | 27.4% | 1 192 MB |
+
+So there are **two** effects, not one. Contracts are necessary — an empty
+node costs nothing and logs no summarisation at all. But cost also grows
+with *uptime on an unchanged contract set*: 7.1% → 27.4% over five hours,
+during which the contract set barely changed.
+
+The second effect is the one that matters for a phone, because it decides
+whether the node is viable over a day rather than an hour, and it is the one
+we cannot explain. The upstream draft now asks about it directly rather than
+implying contract count is the whole story.
+
+Practical upshot for LKNG in the meantime: **the node benefits from being
+restarted**. The duty cycle already stops and starts it on charge and network
+transitions, which turns out to be worth more than it was designed for.

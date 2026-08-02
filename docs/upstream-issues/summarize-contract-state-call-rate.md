@@ -77,14 +77,23 @@ identically to everything above. On the same machine, at the same moment, it
 also samples the long-running node that hosts many contracts:
 
 ```text
-fresh node   (0 contracts, 0 clients):    0.4% of one core,   42 MB
-established  (many contracts):           27.4% of one core, 1192 MB
+empty data dir, 0 contracts, 0 clients:   0.4% of one core,   42 MB
+same contracts, 2 min after restart:      7.1% of one core, 1040 MB
+same contracts, 5 h uptime:              27.4% of one core, 1192 MB
 ```
 
-**A node with nothing to host costs essentially nothing.** The idle cost is
-not a constant baseline; it is roughly proportional to what the node is
-holding. The fresh node also logged **zero** `summarize_contract_state`
-rate-limit lines, consistent with having nothing to summarise.
+Two things, not one:
+
+1. **A node with nothing to host costs essentially nothing** (0.4%), and it
+   logs **zero** `summarize_contract_state` lines. So the idle cost is not a
+   fixed baseline — it needs contracts to exist.
+2. **But it also grows with uptime on an unchanged contract set**: the same
+   node, same data directory, went 7.1% → 27.4% over five hours. Contract
+   count alone does not explain that.
+
+The second point is the more interesting one and we cannot explain it. The
+contract set did not grow appreciably over those five hours; the machine was
+otherwise idle for much of it. Something accumulates.
 
 That makes the mechanism concrete: the per-contract idle cost, multiplied by
 contract count, is what consumes half a phone core. It also suggests the fix
@@ -116,11 +125,14 @@ user's node would accumulate.
 ## Questions
 
 1. Is ~89 calls/s the intended summarisation cadence for an idle node with
-   no client connected, given that the cost scales with contract count?
-2. Can summaries be cached and invalidated on state change? An idle
+   no client connected?
+2. **Why does CPU grow ~4× over five hours on an unchanged contract set?**
+   That is the part we cannot account for, and it is the one that decides
+   whether a phone node is viable over a day rather than an hour.
+3. Can summaries be cached and invalidated on state change? An idle
    contract's state does not change between calls, so nearly all of this
    work recomputes an identical answer.
-3. If the cadence is intended, it deserves prominent documentation:
+4. If the cadence is intended, it deserves prominent documentation:
    `summarize_state` is by far the hottest path in a contract and must be
    O(keys), not O(state). We wrote the obvious implementation and it was
    costly.
