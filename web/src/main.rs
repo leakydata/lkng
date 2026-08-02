@@ -912,6 +912,8 @@ fn App() -> Element {
     let mut book = use_signal(load_book);
     let mut filter = use_signal(lkng_app::GridFilter::default);
     let mut filters_open = use_signal(|| false);
+    let mut pull_start = use_signal(|| None::<f64>);
+    let mut pull_delta = use_signal(|| 0.0f64);
     let mut note_draft = use_signal(String::new);
     let mut dismissed = use_signal(dismissed_backup);
     let _ = dismissed();
@@ -1401,8 +1403,66 @@ fn App() -> Element {
             }
         }
 
-        main { class: if tab() == Tab::Browse { "" } else { "hidden" },
+        main {
+            class: if tab() == Tab::Browse { "" } else { "hidden" },
+            ontouchstart: move |e| {
+                if let Some(t) = e.touches().first() {
+                    pull_start.set(Some(t.client_coordinates().y));
+                }
+            },
+            ontouchend: move |_| {
+                // Only when already scrolled to the top, or the gesture
+                // fights normal scrolling — the reason a naive
+                // pull-to-refresh feels broken rather than helpful.
+                let at_top = web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.document_element())
+                    .map(|e| e.scroll_top() <= 0)
+                    .unwrap_or(true);
+                let pulled = pull_delta() > 70.0;
+                pull_start.set(None);
+                pull_delta.set(0.0);
+                if at_top && pulled && !refreshing() {
+                    coverage.set(coverage_for(&me()));
+                    requested.set(requested() + 1);
+                    refreshing.set(true);
+                    spawn(async move {
+                        gloo_timers::future::TimeoutFuture::new(1500).await;
+                        refreshing.set(false);
+                    });
+                }
+            },
+            ontouchmove: move |e| {
+                if let (Some(start), Some(t)) = (pull_start(), e.touches().first()) {
+                    pull_delta.set(t.client_coordinates().y - start);
+                }
+            },
+
+            if pull_delta() > 20.0 || refreshing() {
+                div { class: "pull",
+                    if refreshing() { "Refreshing…" } else { "Pull to refresh" }
+                }
+            }
+
             div { class: "filterbar",
+                button {
+                    class: "chip",
+                    onclick: move |_| {
+                        // Recompute where we are — this is what picks up a
+                        // location set in Settings — then re-subscribe.
+                        coverage.set(coverage_for(&me()));
+                        requested.set(requested() + 1);
+                        refreshing.set(true);
+                        spawn(async move {
+                            // Long enough to be believable, short enough not
+                            // to feel stuck. The subscriptions are already
+                            // in flight; this only holds the spinner.
+                            gloo_timers::future::TimeoutFuture::new(1500).await;
+                            refreshing.set(false);
+                        });
+                    },
+                    if refreshing() { "Refreshing…" } else { "Refresh" }
+                }
                 button {
                     class: if filter.read().is_empty() { "chip" } else { "chip on" },
                     onclick: move |_| filters_open.set(!filters_open()),
@@ -1780,6 +1840,12 @@ fn App() -> Element {
             }
         }
 
+        // Pull-to-refresh, plus a visible button.
+        //
+        // The gesture alone would be a hidden feature: someone who does not
+        // know it exists has no way to ask the app to look again, which is
+        // exactly the state that made "I set my location and nothing
+        // changed" the correct description of a real bug.
         nav { class: "tabs",
             for t in Tab::BAR {
                 button {
@@ -3075,7 +3141,7 @@ fn SettingsPanel(node: Node, onclose: EventHandler<()>) -> Element {
                                     Some(p) => {
                                         set_manual_position(Some(p));
                                         loc_msg.set(Some(
-                                            "Saved. Reopen the app to move to that area."
+                                            "Saved. Pull down on the grid to look there."
                                                 .into(),
                                         ));
                                     }

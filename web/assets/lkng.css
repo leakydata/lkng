@@ -496,3 +496,7 @@ button.secondary.on { border-color: var(--accent); color: var(--accent); }
 .chip-note { color: var(--muted); font-size: 12px; }
 .filters { padding: 6px 16px 12px; border-bottom: 1px solid var(--line); }
 .chiprow { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 12px; }
+
+.pull {
+  text-align: center; padding: 8px; color: var(--muted); font-size: 12.5px;
+}
