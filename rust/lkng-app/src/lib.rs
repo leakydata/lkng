@@ -1113,3 +1113,113 @@ mod address_book_tests {
         );
     }
 }
+
+/// Why the app may or may not publish the user's presence.
+///
+/// This lives here, not in the UI, because it is the decision that governs
+/// the one irreversible thing the app does: putting a person into a public
+/// cell that anyone may subscribe to. Bytes on this network cannot be
+/// recalled, so the question "may we publish?" deserves to be answered
+/// somewhere it can be tested, rather than inside a render function where
+/// it can only be checked by looking at it.
+///
+/// It is an enum rather than a bool so the UI can tell the user *which*
+/// condition is missing. "You are not visible" with no reason is the kind of
+/// message that makes people reinstall an app rather than fix a setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishBlock {
+    /// No node connection, so a write has nowhere to go.
+    Offline,
+    /// No asserted position. Deliberately blocking: the fallback sample
+    /// area is a real place with real people in it, and publishing against
+    /// it would put someone in a distant public cell, visible to strangers,
+    /// without them having gone anywhere or asked for anything.
+    NoLocation,
+    /// Nothing written yet. Publishing an empty tile would place someone in
+    /// a public grid before they had decided to be there.
+    NoHeadline,
+}
+
+impl PublishBlock {
+    /// A sentence to show the user. Phrased as the state plus the remedy,
+    /// because a status the reader cannot act on is just an apology.
+    pub fn describe(self) -> &'static str {
+        match self {
+            PublishBlock::Offline => "You're not visible — connecting",
+            PublishBlock::NoLocation => "You're not visible — waiting for your location",
+            PublishBlock::NoHeadline => {
+                "You're not visible — add a headline to appear in the grid"
+            }
+        }
+    }
+}
+
+/// Decide whether presence may be published.
+///
+/// `Ok(())` means every condition holds. The first failure is reported, in
+/// the order a user would fix them.
+pub fn publish_gate(
+    connected: bool,
+    has_asserted_location: bool,
+    headline: &str,
+) -> Result<(), PublishBlock> {
+    if !connected {
+        return Err(PublishBlock::Offline);
+    }
+    if !has_asserted_location {
+        return Err(PublishBlock::NoLocation);
+    }
+    if headline.trim().is_empty() {
+        return Err(PublishBlock::NoHeadline);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod publish_gate_tests {
+    use super::*;
+
+    #[test]
+    fn every_condition_must_hold() {
+        assert_eq!(publish_gate(true, true, "hello"), Ok(()));
+        assert_eq!(publish_gate(false, true, "hello"), Err(PublishBlock::Offline));
+        assert_eq!(publish_gate(true, false, "hello"), Err(PublishBlock::NoLocation));
+        assert_eq!(publish_gate(true, true, ""), Err(PublishBlock::NoHeadline));
+    }
+
+    /// Whitespace is not a headline.
+    ///
+    /// Without the trim, a stray space publishes a blank tile — someone
+    /// appears in a public grid showing nothing, having believed they had
+    /// not finished setting up.
+    #[test]
+    fn whitespace_is_not_a_headline() {
+        assert_eq!(publish_gate(true, true, "   \n\t "), Err(PublishBlock::NoHeadline));
+    }
+
+    /// The sample location must never be publishable.
+    ///
+    /// This is the condition most likely to be "simplified" later, because
+    /// in development the fallback area looks exactly like a working one.
+    /// Publishing against it puts a real person into a distant cell they
+    /// have never been to, visible to strangers there.
+    #[test]
+    fn an_unasserted_location_blocks_publishing() {
+        for headline in ["", "looking"] {
+            assert!(
+                publish_gate(true, false, headline).is_err(),
+                "no tile may be published without an asserted location"
+            );
+        }
+    }
+
+    /// Every block has something to say. A silent blocked state is the
+    /// failure mode that makes people reinstall instead of fixing a setting.
+    #[test]
+    fn every_block_explains_itself() {
+        for b in [PublishBlock::Offline, PublishBlock::NoLocation, PublishBlock::NoHeadline] {
+            assert!(b.describe().contains("not visible"));
+            assert!(b.describe().len() > 20, "a reason, not a label");
+        }
+    }
+}

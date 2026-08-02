@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b33302";
+pub const BUILD_MARKER: &str = "b33485";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -666,9 +666,12 @@ fn App() -> Element {
 
     // Mirrors the gate in `publish_presence` exactly. Kept as one expression
     // so the UI cannot claim visibility the publisher would refuse.
-    let visible_to_others = status == Status::Connected
-        && fix.is_publishable()
-        && !draft.read().headline.trim().is_empty();
+    let publish_state = lkng_app::publish_gate(
+        status == Status::Connected,
+        fix.is_publishable(),
+        &draft.read().headline,
+    );
+    let visible_to_others = publish_state.is_ok();
 
     let note = match (&status, live) {
         (Status::Connected, true) => {
@@ -1040,14 +1043,9 @@ fn App() -> Element {
         if tab() == Tab::Browse {
             div {
                 class: if visible_to_others { "visnote on" } else { "visnote" },
-                if visible_to_others {
-                    "You're visible in {cov.home.as_str()}"
-                } else if !fix.is_publishable() {
-                    "You're not visible — waiting for your location"
-                } else if draft.read().headline.trim().is_empty() {
-                    "You're not visible — add a headline to appear in the grid"
-                } else {
-                    "You're not visible — connecting"
+                match publish_state {
+                    Ok(()) => rsx! { "You're visible in {cov.home.as_str()}" },
+                    Err(b) => rsx! { "{b.describe()}" },
                 }
             }
         }
@@ -1100,12 +1098,11 @@ fn publish_presence(
     draft: &Draft,
     fix: Fix,
 ) -> Result<(), String> {
-    if !fix.is_publishable() {
-        return Err("no location yet".into());
-    }
-    if draft.headline.trim().is_empty() {
-        return Err("no headline yet".into());
-    }
+    // The gate lives in `lkng-app` and is unit-tested there. Duplicating it
+    // here as an `if` is how the UI and the publisher drift apart and start
+    // disagreeing about whether someone is in the grid.
+    lkng_app::publish_gate(true, fix.is_publishable(), &draft.headline)
+        .map_err(|b| b.describe().to_string())?;
 
     let params = cov.publish_target();
     let filters = lkng_app::TileFilters {
