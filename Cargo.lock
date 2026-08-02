@@ -1073,6 +1073,7 @@ dependencies = [
  "ciborium",
  "freenet-stdlib",
  "futures",
+ "lkng-album",
  "lkng-app",
  "lkng-identity",
  "lkng-inbox",

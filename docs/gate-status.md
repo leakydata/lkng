@@ -1619,3 +1619,13 @@ Other decisions worth their weight:
   is not sitting in a public cell for scrapers.
 
 161 tests. UI still to come; the crate and contract are done and tested.
+
+**Proven on mainnet** (`album_share`): an album is published, fetched by
+anyone (5 665 bytes, verified), and none of the plaintext appears in those
+bytes. A stranger holding the whole album cannot read it. A friend, using
+only what arrived in their inbox, reads both photos. After revocation the
+album is generation 2: the removed viewer still reads the two old photos and
+cannot read the new one.
+
+That last line is the design stated as an observation rather than a promise.
+The bytes they already had are theirs, and no contract can take them back.
