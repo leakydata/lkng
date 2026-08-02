@@ -476,3 +476,11 @@ button.wide { width: 100%; padding: 13px; border-radius: 12px; margin-bottom: 12
   padding: 1px 5px; border-radius: 5px;
 }
 .photo-cell.add input { display: none; }
+
+.fav-box { margin-top: 10px; }
+button.secondary.on { border-color: var(--accent); color: var(--accent); }
+.note {
+  width: 100%; min-height: 68px; margin-top: 8px; padding: 10px 12px;
+  background: #1b1d24; border: 1px solid var(--line); border-radius: 10px;
+  color: inherit; font: inherit; font-size: 14px; resize: vertical;
+}

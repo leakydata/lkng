@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b84980";
+pub const BUILD_MARKER: &str = "b85418";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -888,6 +888,8 @@ fn App() -> Element {
     let mut shared = use_signal(|| false);
     let mut reporting = use_signal(|| None::<[u8; 32]>);
     let mut album_msg = use_signal(|| None::<String>);
+    let mut book = use_signal(load_book);
+    let mut note_draft = use_signal(String::new);
     let mut dismissed = use_signal(dismissed_backup);
     let _ = dismissed();
 
@@ -1532,6 +1534,67 @@ fn App() -> Element {
                             "Report"
                         }
                     }
+
+                    // Favourites and notes are keyed by the verifying key on
+                    // the tile, which is an *epoch* key. So a favourite made
+                    // today does not survive the epoch turning over — stated
+                    // in the UI rather than left for the user to discover
+                    // when their list empties.
+                    if let Some(vk) = t.verifying_key.clone() {
+                        div { class: "fav-box",
+                            button {
+                                class: if book.read().is_favourite(&vk) {
+                                    "secondary on"
+                                } else {
+                                    "secondary"
+                                },
+                                onclick: {
+                                    let vk = vk.clone();
+                                    let name = t.headline.clone();
+                                    move |_| {
+                                        let mut b = book.write();
+                                        if b.is_favourite(&vk) {
+                                            b.unfavourite(&vk);
+                                        } else {
+                                            let _ = b.favourite(
+                                                &vk,
+                                                name.chars().take(64).collect::<String>().as_str(),
+                                                now_unix() * 1000,
+                                            );
+                                        }
+                                        let snapshot = b.clone();
+                                        drop(b);
+                                        save_book(&snapshot);
+                                    }
+                                },
+                                if book.read().is_favourite(&vk) { "Saved" } else { "Save" }
+                            }
+
+                            if book.read().is_favourite(&vk) {
+                                textarea {
+                                    class: "note",
+                                    placeholder: "Private note — stays on this device",
+                                    value: "{book.read().note(&vk).unwrap_or_default()}",
+                                    oninput: {
+                                        let vk = vk.clone();
+                                        move |e: Event<FormData>| {
+                                            note_draft.set(e.value());
+                                            let mut b = book.write();
+                                            let _ = b.set_note(&vk, &e.value());
+                                            let snapshot = b.clone();
+                                            drop(b);
+                                            save_book(&snapshot);
+                                        }
+                                    },
+                                }
+                                p { class: "hint",
+                                    "Notes never leave this device — not to them, not to "
+                                    "us, not to the network. They travel only inside your "
+                                    "backup file."
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2082,6 +2145,32 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
                     div { class: "badge", "next area" }
                 }
             }
+        }
+    }
+}
+
+/// Storage key for the address book — favourites, notes, blocks.
+const BOOK_KEY: &str = "lkng.book.v1";
+
+/// Load the address book from device storage.
+///
+/// Favourites and notes never leave the device, so this is the whole
+/// persistence story: there is no contract, no sync, and nothing on the
+/// network that could tell anyone who you saved or what you wrote about
+/// them. Grindr keeps that on a server; here it is in local storage or
+/// nowhere, and the backup file is the only way it travels.
+fn load_book() -> lkng_app::AddressBook {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(BOOK_KEY).ok().flatten())
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
+fn save_book(book: &lkng_app::AddressBook) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(j) = serde_json::to_string(book) {
+            let _ = s.set_item(BOOK_KEY, &j);
         }
     }
 }

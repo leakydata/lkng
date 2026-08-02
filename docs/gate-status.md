@@ -2304,3 +2304,36 @@ passed with primary = 0 and the bug would have shipped — which is exactly
 how photos looked finished twice before while being device-local.
 
 Added to the smoke suite, now six paths.
+
+## 2026-08-02 — favourites and notes were built and never wired
+
+`AddressBook` — favourites, private notes, blocks, export/import, all
+unit-tested — has been in `lkng-app` since early on and appeared **nowhere in
+the UI**. The user asked for both features explicitly weeks ago. The library
+was complete; the button did not exist.
+
+That is the fourth instance of the same shape today (presence publishing,
+profile publishing, photo storage, and now this): the hard part written and
+tested, the last wire never connected, and nothing failing to say so.
+
+Now wired: Save on a profile, a private note under it, both persisted to
+device storage only. The copy says plainly that notes never leave the device
+— not to them, not to us, not to the network — and travel only inside a
+backup file.
+
+**One honest limitation surfaced in the UI rather than discovered later:**
+favourites key off the verifying key on a tile, which is an *epoch* key. So a
+favourite does not survive the epoch turning over. Fixing that properly means
+favouriting a durable identity, which is only available after someone shares
+their profile — the natural place for it, and the next step rather than a
+silent compromise now.
+
+## On "see who viewed you"
+
+Not built, and not going to be as Grindr has it. Fetching a profile here is a
+contract GET: the owner cannot observe it, and no server exists that could.
+Reproducing the feature would mean building the surveillance apparatus this
+project exists to refuse, and PLAN.md said so before any of this was written.
+
+The Taps screen already covers the underlying want — *someone noticed me* —
+with the person choosing to send it.
