@@ -154,3 +154,69 @@ fn decode_data_url(url: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+
+/// Larger cap for an album photo — see `lkng_album::MAX_PHOTO_BYTES`.
+const ALBUM_MAX_BYTES: usize = 256 * 1024;
+/// Album photos are looked at properly, not as a grid thumbnail.
+const ALBUM_PX: u32 = 1024;
+
+/// Prepare a photo for a private album.
+///
+/// Same canvas round trip as [`to_thumbnail`], for the same reason: EXIF —
+/// including the exact coordinates a phone records — cannot survive being
+/// redrawn as pixels. That matters at least as much here as on a tile. An
+/// album is shared with people the owner chose, but "chose" is not "trusts
+/// with their home address", and a photo taken indoors carries one.
+///
+/// Larger and higher quality than a tile: an album photo is fetched
+/// deliberately by a few people rather than pushed to everyone in a cell.
+pub async fn to_album_photo(blob: &Blob) -> Result<Vec<u8>, PhotoError> {
+    let url = Url::create_object_url_with_blob(blob).map_err(|_| PhotoError::Decode)?;
+    let img = HtmlImageElement::new().map_err(|_| PhotoError::Decode)?;
+    img.set_src(&url);
+    let decoded = JsFuture::from(img.decode()).await;
+    let _ = Url::revoke_object_url(&url);
+    decoded.map_err(|_| PhotoError::Decode)?;
+
+    let (w, h) = (img.natural_width(), img.natural_height());
+    if w == 0 || h == 0 {
+        return Err(PhotoError::Decode);
+    }
+
+    // Fit inside a square bound, preserving aspect: an album photo is looked
+    // at, so cropping it to a square would throw away what it is of.
+    let scale = (ALBUM_PX as f64 / w.max(h) as f64).min(1.0);
+    let (dw, dh) = (((w as f64) * scale) as u32, ((h as f64) * scale) as u32);
+
+    let doc = web_sys::window().and_then(|w| w.document()).ok_or(PhotoError::Encode)?;
+    let canvas: HtmlCanvasElement = doc
+        .create_element("canvas")
+        .map_err(|_| PhotoError::Encode)?
+        .dyn_into()
+        .map_err(|_| PhotoError::Encode)?;
+    canvas.set_width(dw.max(1));
+    canvas.set_height(dh.max(1));
+
+    let ctx: CanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .map_err(|_| PhotoError::Encode)?
+        .ok_or(PhotoError::Encode)?
+        .dyn_into()
+        .map_err(|_| PhotoError::Encode)?;
+    ctx.set_image_smoothing_enabled(true);
+    ctx.draw_image_with_html_image_element_and_dw_and_dh(&img, 0.0, 0.0, dw as f64, dh as f64)
+        .map_err(|_| PhotoError::Encode)?;
+
+    let mut last = 0usize;
+    for q in [0.86, 0.78, 0.7, 0.6, 0.5, 0.4] {
+        let data_url = canvas
+            .to_data_url_with_type_and_encoder_options("image/webp", &JsValue::from_f64(q))
+            .map_err(|_| PhotoError::Encode)?;
+        let bytes = decode_data_url(&data_url).ok_or(PhotoError::Encode)?;
+        last = bytes.len();
+        if bytes.len() <= ALBUM_MAX_BYTES {
+            return Ok(bytes);
+        }
+    }
+    Err(PhotoError::TooLarge(last))
+}

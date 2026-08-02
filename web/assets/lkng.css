@@ -424,3 +424,13 @@ button.secondary:disabled { opacity: .45; }
 }
 .dob input:last-child { flex: 1.4; }
 button.wide { width: 100%; padding: 13px; border-radius: 12px; margin-bottom: 12px; }
+
+.wide-pick { width: 100%; height: 92px; margin: 12px 0; }
+.album-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 6px; margin-top: 12px;
+}
+.album-cell {
+  aspect-ratio: 1; border-radius: 8px;
+  background: #1b1d24; background-size: cover; background-position: center;
+}

@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b35335";
+pub const BUILD_MARKER: &str = "b36395";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -59,6 +59,39 @@ const INBOX_WASM: &[u8] = include_bytes!(
 const FEED_WASM: &[u8] = include_bytes!(
     "../../contracts/moderation/target/wasm32-unknown-unknown/release/moderation_contract.wasm"
 );
+
+/// Compiled album contract.
+const ALBUM_WASM: &[u8] = include_bytes!(
+    "../../contracts/album/target/wasm32-unknown-unknown/release/album_contract.wasm"
+);
+
+/// Storage key for this device's album key and generation.
+const ALBUM_KEY_KEY: &str = "lkng.album.key.v1";
+
+/// The album's symmetric key, created on first use.
+///
+/// Held in web storage rather than the Keystore vault, and that is a
+/// deliberate downgrade: this key is *designed to be shared* — every person
+/// granted the album has a copy. Sealing it beside the identity seed would
+/// imply a secrecy it does not have, and would put a routinely-copied value
+/// into the vault whose whole purpose is holding the one value that must
+/// never be copied.
+fn album_key() -> [u8; 32] {
+    let store = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+    if let Some(s) = &store {
+        if let Ok(Some(hex)) = s.get_item(ALBUM_KEY_KEY) {
+            if let Some(k) = decode_hex(&hex) {
+                return k;
+            }
+        }
+    }
+    let mut k = [0u8; 32];
+    getrandom_03::fill(&mut k).expect("platform CSPRNG");
+    if let Some(s) = &store {
+        let _ = s.set_item(ALBUM_KEY_KEY, &encode_hex(&k));
+    }
+    k
+}
 
 /// The feed a report goes to, and the one subscribed by default.
 ///
@@ -799,7 +832,18 @@ fn App() -> Element {
     let mut compose = use_signal(String::new);
     let mut send_error = use_signal(|| None::<String>);
     let mut tapped = use_signal(|| false);
+    let mut shared = use_signal(|| false);
     let mut reporting = use_signal(|| None::<[u8; 32]>);
+    let mut album_msg = use_signal(|| None::<String>);
+
+    // Our own album, as the node currently holds it.
+    let my_album: lkng_album::AlbumState = {
+        let params = album_params(&session);
+        let key = Node::key_for(ALBUM_WASM, &cbor(&params));
+        node.state_of(key.id())
+            .and_then(|b| ciborium::de::from_reader(&b[..]).ok())
+            .unwrap_or_default()
+    };
     let mut report_done = use_signal(|| false);
     let visible: Vec<Tile> = tiles
         .into_iter()
@@ -1011,14 +1055,90 @@ fn App() -> Element {
 
         if tab() == Tab::Albums {
             main { class: "screen",
-                h2 { class: "screen-h", "Albums" }
-                div { class: "empty",
-                    "Albums aren't built yet."
-                    br {}
-                    span { class: "hint",
-                        "When they are, an album will be shared with named people "
-                        "rather than published — a private photo on a public network "
-                        "cannot be un-shared, so it must never be public in the first place."
+                h2 { class: "screen-h", "Album" }
+                p { class: "hint",
+                    "Photos here are encrypted on this device before they go "
+                    "anywhere. Anyone can fetch the file; only people you share it "
+                    "with can open it."
+                }
+                p { class: "hint",
+                    "Sharing cannot be undone. Removing someone stops them seeing "
+                    "anything you add afterwards — it cannot take back a photo they "
+                    "have already opened, because that copy is on their phone now. "
+                    "Share accordingly."
+                }
+
+                label { class: "photo-pick wide-pick",
+                    input {
+                        r#type: "file",
+                        accept: "image/*",
+                        onchange: {
+                            let node = node.clone();
+                            let album = my_album.clone();
+                            move |evt: Event<FormData>| {
+                                let files = evt.files();
+                                let node = node.clone();
+                                let album = album.clone();
+                                spawn(async move {
+                                    let Some(first) = files.into_iter().next() else { return };
+                                    let Ok(bytes) = first.read_bytes().await else {
+                                        album_msg.set(Some("could not read that file".into()));
+                                        return;
+                                    };
+                                    // Re-encoded through the same canvas path the
+                                    // profile photo uses, so EXIF -- including the
+                                    // coordinates the photo was taken at -- cannot
+                                    // survive into an album either.
+                                    let arr = js_sys::Uint8Array::from(&bytes[..]);
+                                    let parts = js_sys::Array::of1(&arr.buffer());
+                                    let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts)
+                                    else {
+                                        album_msg.set(Some("could not read that image".into()));
+                                        return;
+                                    };
+                                    let clean = match photo::to_album_photo(&blob).await {
+                                        Ok(b) => b,
+                                        Err(e) => {
+                                            album_msg.set(Some(e.to_string()));
+                                            return;
+                                        }
+                                    };
+                                    match add_album_photo(&node, &me(), &album, &clean) {
+                                        Ok(()) => album_msg.set(Some(format!(
+                                            "Added: {} bytes, encrypted before it left this device.",
+                                            clean.len()
+                                        ))),
+                                        Err(e) => album_msg.set(Some(e)),
+                                    }
+                                });
+                            }
+                        },
+                    }
+                    span { "Add a photo to your album" }
+                }
+
+                if let Some(m) = album_msg() {
+                    div { class: "sval", "{m}" }
+                }
+
+                div { class: "album-grid",
+                    for (i, p) in my_album.readable_at(my_album.generation).iter().enumerate() {
+                        div {
+                            key: "ap-{i}",
+                            class: "album-cell",
+                            style: "{album_art(p)}",
+                        }
+                    }
+                }
+
+                if my_album.photos.is_empty() {
+                    div { class: "empty",
+                        "Nothing in your album yet."
+                    }
+                } else {
+                    p { class: "hint",
+                        "{my_album.photos.len()} photo(s), generation "
+                        "{my_album.generation}. Share it from someone's profile."
                     }
                 }
             }
@@ -1173,6 +1293,24 @@ fn App() -> Element {
                                 }
                             },
                             if tapped() { "Tapped" } else { "Tap" }
+                        }
+                        button {
+                            class: "secondary",
+                            disabled: t.encryption_key.is_none() || !live
+                                || my_album.photos.is_empty(),
+                            onclick: {
+                                let node = node.clone();
+                                let cov = cov.clone();
+                                let t = t.clone();
+                                let gen = my_album.generation;
+                                move |_| {
+                                    match share_album(&node, &me(), &t, cov.epochs[0], gen) {
+                                        Ok(()) => shared.set(true),
+                                        Err(e) => send_error.set(Some(e)),
+                                    }
+                                }
+                            },
+                            if shared() { "Album shared" } else { "Share album" }
                         }
                         if !live {
                             p { class: "hint",
@@ -1398,6 +1536,90 @@ fn publish_presence(
     Ok(())
 }
 
+/// Add a photo to this device's album, encrypting it before it goes near
+/// the network.
+///
+/// The whole state is re-signed and republished, because an album is
+/// single-writer: there is no merge, and a delta that only added would make
+/// deleting a photo impossible.
+fn add_album_photo(
+    node: &Node,
+    session: &Session,
+    existing: &lkng_album::AlbumState,
+    plaintext: &[u8],
+) -> Result<(), String> {
+    let mut nonce = [0u8; 24];
+    getrandom_03::fill(&mut nonce).map_err(|e| e.to_string())?;
+
+    let mut photo = Identity::seal_album_photo(&album_key(), plaintext, nonce)
+        .map_err(|e| e.to_string())?;
+    let generation = existing.generation.max(1);
+    photo.generation = generation;
+    photo.added_ms = now_unix() * 1000;
+
+    let mut next = existing.clone();
+    next.generation = generation;
+    next.insert(photo);
+    if next.photos.len() > lkng_album::MAX_PHOTOS {
+        return Err(format!("an album holds at most {} photos", lkng_album::MAX_PHOTOS));
+    }
+
+    let params = album_params(session);
+    session
+        .identity()
+        .sign_album(&mut next, &params)
+        .map_err(|e| e.to_string())?;
+
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(ALBUM_WASM, &params_bytes);
+    node.seed_once(ALBUM_WASM, &params_bytes, cbor(&next));
+    node.update(key, cbor(&next));
+    Ok(())
+}
+
+fn album_params(session: &Session) -> lkng_album::AlbumParams {
+    lkng_album::AlbumParams {
+        schema_v: SCHEMA_V,
+        address: lkng_album::address_of(&session.identity().verifying_key_bytes(), 0),
+    }
+}
+
+/// Share the album with someone, by sealing the key into their inbox.
+///
+/// The grant is an ordinary envelope, so nobody replicating that inbox can
+/// tell an album was shared, with whom, or that one exists.
+fn share_album(
+    node: &Node,
+    session: &Session,
+    tile: &Tile,
+    epoch: u64,
+    generation: u32,
+) -> Result<(), String> {
+    let grant = lkng_album::Grant {
+        address: album_params(session).address,
+        key: album_key().to_vec(),
+        generation: generation.max(1),
+        owner_vk: session.identity().verifying_key_bytes(),
+    };
+    let payload = grant.encode().map_err(|e| e.to_string())?;
+
+    let enc = tile.encryption_key.ok_or("they cannot receive an album yet")?;
+    let their_vk = tile.verifying_key.clone().ok_or("they cannot receive an album yet")?;
+    let env = session
+        .identity()
+        .seal_message(&enc, &their_vk, epoch, &payload, now_unix() * 1000)
+        .map_err(|e| e.to_string())?;
+
+    let params = lkng_inbox::InboxParams::new(&their_vk);
+    let params_bytes = cbor(&params);
+    let key = Node::key_for(INBOX_WASM, &params_bytes);
+    let mut delta = lkng_inbox::InboxState::default();
+    delta.insert(env);
+    node.seed_once(INBOX_WASM, &params_bytes, cbor(&lkng_inbox::InboxState::default()));
+    node.update(key, cbor(&delta));
+    Ok(())
+}
+
 /// Seal a message to a tile and write it into the recipient's inbox.
 ///
 /// # Why this seeds before it updates
@@ -1498,6 +1720,26 @@ fn tile_art(tile: &Tile) -> String {
              background-position:center",
             b64(&tile.thumbnail)
         )
+    }
+}
+
+/// Background for one of our own album photos.
+///
+/// Decrypted here, in the browser, purely to draw it. The plaintext exists
+/// only as a `data:` URL held for the life of the render — it is never
+/// written back to storage or to any contract, because the encrypted copy is
+/// the only one that should exist anywhere but the screen.
+fn album_art(photo: &lkng_album::EncryptedPhoto) -> String {
+    match Identity::open_album_photo(&album_key(), photo) {
+        Ok(bytes) => format!(
+            "background-image:url(data:image/webp;base64,{});background-size:cover;\
+             background-position:center",
+            b64(&bytes)
+        ),
+        // A photo we cannot open is one encrypted under a key this device no
+        // longer has -- shown as a blank rather than hidden, so the count
+        // stays honest.
+        Err(_) => "background:#1b1d24".to_string(),
     }
 }
 
