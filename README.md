@@ -139,7 +139,7 @@ run them against mainnet:
 | Real location | **Works** — coarse device fix, or set by hand |
 | Age gate | **Works** — self-declared, and the app says so |
 | Onboarding | **Partial** — age gate then the grid; no guided setup |
-| Recovery backup UI | **Missing** — the format and crypto exist, the screen does not |
+| Account backup and restore | **Works** — encrypted file, Argon2id-stretched passphrase |
 | Battery/Doze measurement | **Missing** — short runs look fine; that is a different claim |
 
 ### What "works" means here, and what it does not
@@ -151,8 +151,9 @@ the product is not".
 
 **Do not use this as a dating app yet.** The specific gaps that matter:
 
-- losing the phone loses the account — the recovery bundle format exists and
-  is tested, but nothing in the UI creates one yet;
+- losing the phone loses the account **unless a backup file was saved**, and
+  nothing prompts for one during setup yet — it is a settings screen a user
+  has to find;
 - nobody has measured what the node does to a battery over a day;
 - a public photo grid is scrapeable and face matching defeats pseudonym
   rotation, which is true of every app in this category and is stated in

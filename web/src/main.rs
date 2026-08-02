@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b36712";
+pub const BUILD_MARKER: &str = "b37017";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -1731,6 +1731,134 @@ fn share_album(
     Ok(())
 }
 
+
+/// Write a restored identity and its app data back into device storage.
+///
+/// Deliberately writes the seed through the same vault path a fresh install
+/// uses, so a restored account is Keystore-sealed exactly like a new one. A
+/// restore that quietly left the key in plain web storage would silently
+/// downgrade the person who had most reason to trust the backup.
+fn restore_into_device(id: &Identity, extra: &[u8]) {
+    vault_put(SEED_KEY, &id.seed_bytes());
+
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(extra) else {
+        return;
+    };
+    if let Some(d) = v.get("draft") {
+        if let Ok(draft) = serde_json::from_value::<Draft>(d.clone()) {
+            save_draft(&draft);
+        }
+    }
+    if let Some(k) = v.get("album_key").and_then(|k| k.as_str()) {
+        if let Some(store) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = store.set_item(ALBUM_KEY_KEY, k);
+        }
+    }
+    if let Some(sent) = v.get("sent").and_then(|s| s.as_array()) {
+        for r in sent {
+            let (Some(peer), Some(body), Some(ms)) = (
+                r.get("peer").and_then(|p| p.as_str()).and_then(decode_hex),
+                r.get("body").and_then(|b| b.as_str()),
+                r.get("sent_ms").and_then(|m| m.as_u64()),
+            ) else {
+                continue;
+            };
+            chat::record_sent(chat::SentRecord {
+                peer,
+                tap: r.get("tap").and_then(|t| t.as_bool()).unwrap_or(false),
+                body: body.to_string(),
+                sent_ms: ms,
+            });
+        }
+    }
+}
+
+/// Build an encrypted account backup.
+///
+/// # What is in it, and why the app data travels with the key
+///
+/// The 32-byte identity seed *is* the account — it derives the signing key,
+/// every epoch subkey, the encryption key and the album key. Alongside it
+/// goes the app data that exists nowhere else: the profile draft, sent
+/// messages, favourites, notes and blocks. Those are not recoverable from
+/// the network by design, so a backup that saved only the key would restore
+/// an identity with no history, which is not what a person means by
+/// "getting my account back".
+///
+/// # Why a passphrase, and why the strength warning is not decoration
+///
+/// The bundle is stretched with Argon2id (64 MiB, 3 passes) because it is a
+/// file the user will put somewhere — a downloads folder, a cloud drive, a
+/// message to themselves. Anyone who obtains it can attack it offline,
+/// forever, at their own pace. Argon2id makes that expensive per guess; it
+/// cannot make a common passphrase safe.
+fn build_backup(session: &Session, passphrase: &str) -> Result<Vec<u8>, String> {
+    let mut salt = [0u8; 16];
+    getrandom_03::fill(&mut salt).map_err(|e| e.to_string())?;
+
+    // Everything local that the network cannot give back.
+    let extra = serde_json::to_vec(&serde_json::json!({
+        "draft": load_draft(),
+        "sent": chat::load_sent().iter().map(|r| serde_json::json!({
+            "peer": hex(&r.peer),
+            "tap": r.tap,
+            "body": r.body,
+            "sent_ms": r.sent_ms,
+        })).collect::<Vec<_>>(),
+        "album_key": encode_hex(&album_key()),
+    }))
+    .map_err(|e| e.to_string())?;
+
+    session
+        .identity()
+        .to_backup_with(passphrase, salt, &extra)
+        .map_err(|e| e.to_string())
+}
+
+/// Offer a byte blob to the user as a download.
+///
+/// A file, not a copyable string. The bundle is a few kilobytes of binary;
+/// asking someone to select and paste that reliably is asking for a
+/// truncated backup that only fails when they need it.
+fn offer_download(bytes: &[u8], filename: &str) -> Result<(), String> {
+    let arr = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::of1(&arr.buffer());
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+        .map_err(|_| "could not build the file".to_string())?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| "could not build the file".to_string())?;
+
+    let doc = web_sys::window()
+        .and_then(|w| w.document())
+        .ok_or("no document")?;
+    let a = doc
+        .create_element("a")
+        .map_err(|_| "could not build the link".to_string())?;
+    let _ = a.set_attribute("href", &url);
+    let _ = a.set_attribute("download", filename);
+    let el: web_sys::HtmlElement = a.dyn_into().map_err(|_| "bad element".to_string())?;
+    el.click();
+    let _ = web_sys::Url::revoke_object_url(&url);
+    Ok(())
+}
+
+/// How weak a passphrase is, in words a person can act on.
+///
+/// Deliberately not a coloured bar with no explanation. The threat is
+/// offline brute force against a file the user has stored somewhere, so the
+/// advice that matters is length, and the message says so.
+fn passphrase_warning(p: &str) -> Option<&'static str> {
+    if p.chars().count() < 12 {
+        Some("Too short. Use at least 12 characters — this file can be attacked \
+              offline by anyone who gets a copy, for as long as they like.")
+    } else if !p.contains(' ') && p.chars().count() < 16 {
+        Some("Consider several unrelated words instead. Length beats symbols \
+              against an offline attack.")
+    } else {
+        None
+    }
+}
+
 /// Seal a message to a tile and write it into the recipient's inbox.
 ///
 /// # Why this seeds before it updates
@@ -2114,6 +2242,8 @@ fn SettingsPanel(onclose: EventHandler<()>) -> Element {
         manual_position().map(|(a, b)| format!("{a}, {b}")).unwrap_or_default()
     });
     let mut loc_msg = use_signal(|| None::<String>);
+    let mut pass = use_signal(String::new);
+    let mut backup_msg = use_signal(|| None::<String>);
     rsx! {
         section { class: "editor",
             header { class: "bar",
@@ -2185,6 +2315,98 @@ fn SettingsPanel(onclose: EventHandler<()>) -> Element {
                         div { class: "sval", "{m}" }
                     }
                 }
+                div { class: "setting",
+                    div { class: "sname", "Back up your account" }
+                    div { class: "sval",
+                        "Your account is a key on this device. There is no server "
+                        "holding a copy, no password reset and nobody who can let "
+                        "you back in — if you lose this phone without a backup, "
+                        "the account is gone permanently."
+                    }
+                    div { class: "sval",
+                        "This saves an encrypted file containing your key, your "
+                        "profile and your message history. Keep it somewhere you "
+                        "will still have if the phone is lost."
+                    }
+                    input {
+                        r#type: "password",
+                        placeholder: "passphrase for the backup file",
+                        value: "{pass}",
+                        oninput: move |e| pass.set(e.value()),
+                    }
+                    if let Some(w) = passphrase_warning(&pass()) {
+                        div { class: "warn", "{w}" }
+                    }
+                    div { class: "row",
+                        button {
+                            class: "primary",
+                            disabled: pass().chars().count() < 12,
+                            onclick: move |_| {
+                                match build_backup(&me(), &pass.peek().clone())
+                                    .and_then(|b| {
+                                        let n = b.len();
+                                        offer_download(&b, "lkng-account-backup.bin").map(|_| n)
+                                    })
+                                {
+                                    Ok(n) => backup_msg.set(Some(format!(
+                                        "Saved {n} bytes. Without this passphrase the \
+                                         file cannot be opened by anyone, including us."
+                                    ))),
+                                    Err(e) => backup_msg.set(Some(e)),
+                                }
+                            },
+                            "Save backup file"
+                        }
+                    }
+                    if let Some(m) = backup_msg() {
+                        div { class: "sval", "{m}" }
+                    }
+                }
+
+                div { class: "setting",
+                    div { class: "sname", "Restore on this device" }
+                    div { class: "sval",
+                        "Moving from another phone: pick the backup file and enter "
+                        "its passphrase. This replaces the identity on this device, "
+                        "so do it before you build a profile here."
+                    }
+                    label { class: "linkish restore-pick",
+                        input {
+                            r#type: "file",
+                            onchange: move |evt: Event<FormData>| {
+                                let files = evt.files();
+                                spawn(async move {
+                                    let Some(first) = files.into_iter().next() else { return };
+                                    let Ok(bytes) = first.read_bytes().await else {
+                                        backup_msg.set(Some("could not read that file".into()));
+                                        return;
+                                    };
+                                    let phrase = pass.peek().clone();
+                                    match Identity::from_backup_with(&bytes, &phrase) {
+                                        Ok((id, extra)) => {
+                                            restore_into_device(&id, &extra);
+                                            backup_msg.set(Some(
+                                                "Restored. Close and reopen the app.".into(),
+                                            ));
+                                        }
+                                        // One message for both wrong-passphrase and
+                                        // corrupt-file, because the code cannot tell
+                                        // them apart -- AEAD failure is the same
+                                        // either way -- and guessing would send
+                                        // someone hunting the wrong problem.
+                                        Err(_) => backup_msg.set(Some(
+                                            "That passphrase did not open the file, or \
+                                             the file is damaged."
+                                                .into(),
+                                        )),
+                                    }
+                                });
+                            },
+                        }
+                        "Choose a backup file"
+                    }
+                }
+
                 div { class: "setting",
                     div { class: "sname", "Your node" }
                     div { class: "sval",

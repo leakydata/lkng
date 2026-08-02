@@ -91,6 +91,19 @@ impl Identity {
         Self { seed, signing }
     }
 
+    /// The raw seed.
+    ///
+    /// Exposed narrowly and reluctantly: the seed *is* the account, and every
+    /// other API here exists so callers never have to touch it. The one
+    /// legitimate caller is a restore, which must write the recovered seed
+    /// into device storage — there is no way to do that without holding it.
+    ///
+    /// Anything else that reaches for this should be a method on `Identity`
+    /// instead.
+    pub fn seed_bytes(&self) -> [u8; 32] {
+        self.seed
+    }
+
     /// The public verifying key, encoded (1952 bytes).
     pub fn verifying_key_bytes(&self) -> Vec<u8> {
         self.signing.expanded_key().verifying_key().encode().to_vec()

@@ -1663,3 +1663,33 @@ the replacement applied zero times and the build stayed green. Caught by
 grepping for the new identifier rather than trusting "no errors" — the same
 class of failure as the stale bundle, at a smaller scale, and the same fix:
 check the artifact, not the report.
+
+## 2026-08-01 — account backup and restore
+
+The crypto had existed and been tested since the first week; there was no
+screen. So "losing the phone loses the account" was true of every install,
+and the README said so while the fix sat unused in a library.
+
+The backup carries the seed **and** the app data that exists nowhere else —
+profile draft, sent messages, album key. A backup of only the key would
+restore an identity with no history, which is not what a person means by
+getting their account back.
+
+Two details worth their weight:
+
+- **Restore writes the seed through the same vault path a fresh install
+  uses**, so a restored account is Keystore-sealed like a new one. A restore
+  that quietly left the key in plain web storage would downgrade exactly the
+  person who had most reason to trust the backup.
+- **Wrong passphrase and damaged file give one message.** AEAD failure is
+  indistinguishable between the two, and inventing a distinction would send
+  someone hunting a problem they do not have.
+
+The passphrase warning talks about *length*, not symbols, because the threat
+is offline brute force against a file the user has stored somewhere. Argon2id
+at 64 MiB / 3 passes makes each guess expensive; it cannot make a common
+passphrase safe, and the copy says so rather than showing a green bar.
+
+Still missing: nothing prompts for a backup during setup. It is a settings
+screen a user has to go looking for, which for the one action that prevents
+permanent account loss is the wrong shape. Onboarding should offer it.
