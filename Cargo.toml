@@ -6,6 +6,7 @@ members = [
     "rust/lkng-inbox",
     "rust/lkng-location",
     "rust/lkng-moderation",
+    "rust/lkng-album",
     "rust/lkng-presence",
     "rust/lkng-profile",
     "rust/lkng-transport",

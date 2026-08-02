@@ -1571,3 +1571,51 @@ the parameters. It needed a contract that does.
 This is now the fourth time today that something confidently correct on
 paper was wrong in fact, and the fourth time the difference cost one round
 trip to find.
+
+## 2026-08-01 — albums: ciphertext on the network, keys per person
+
+`lkng-album` + `contracts/album`. Everything here follows from one fact: **a
+private photo on a public network cannot be un-shared.** Freenet replicates;
+there is no server to delete from and no way to make a peer forget bytes it
+holds. So the design cannot rest on withdrawing access later — the bytes
+must never have been readable.
+
+The album contract therefore holds **ciphertext only**. Anyone may fetch it
+and it is meaningless to them. What is shared is the key, sealed
+individually to each named person and delivered through the inbox, where a
+grant is indistinguishable on the wire from an ordinary message: nobody
+replicating an inbox can tell that an album was shared, with whom, or that
+one exists.
+
+Splitting key from photos also means adding a viewer costs one small message
+rather than a re-upload — an album shared with ten people is uploaded once.
+
+**Revocation is prospective, and that is in the data, not just the prose.**
+Photos carry a key `generation`; removing someone bumps it. `readable_at`
+returns everything at or below a viewer's generation and nothing above. Two
+tests hold both halves:
+
+- `a_removed_viewer_sees_nothing_added_afterwards` — the guarantee;
+- `removal_does_not_take_back_what_was_already_shared` — the honest converse,
+  asserted so nobody later "fixes" it into pretending otherwise. They have
+  the ciphertext and the old key; those are facts about their device now. A
+  data structure cannot take them back and the UI must not imply it can.
+
+Other decisions worth their weight:
+
+- **There is no plaintext photo type.** A struct that *could* hold a
+  cleartext photo is one somebody eventually serialises into a contract by
+  mistake, and on this network that mistake is permanent.
+- **An album verifies only at an address derivable from its owner's key.**
+  Without that check anyone could sign their own album, place it at
+  someone else's address, and a grant would point viewers at an impostor.
+- **Generation never moves backwards** in the contract. A replayed older
+  state would reinstate a key a removed viewer still holds — silently
+  undoing a revocation the owner believes happened.
+- **Grants carry a domain prefix**, so a text message can never decode as a
+  grant and a grant can never be rendered as text somebody typed.
+- **The durable key signs an album**, unlike a tile. Acceptable here
+  precisely because an album's address is known only to grantees, so the key
+  is not sitting in a public cell for scrapers.
+
+161 tests. UI still to come; the crate and contract are done and tested.

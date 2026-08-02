@@ -64,7 +64,7 @@ grep -q "\"$MARKER\";" web/src/main.rs \
 # read comes back empty. Building in the other order produces a UI that
 # looks perfectly healthy and can talk to nobody.
 echo "==> building contracts"
-for c in presence-cell inbox profile moderation; do
+for c in presence-cell inbox profile moderation album; do
   [ -d "$ROOT/contracts/$c" ] || continue
   ( cd "$ROOT/contracts/$c" \
     && CARGO_TARGET_DIR="$PWD/target" cargo build --release \

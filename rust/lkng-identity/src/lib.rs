@@ -208,6 +208,73 @@ impl Identity {
         Ok(())
     }
 
+    /// Encrypt a photo for an album under its symmetric key.
+    ///
+    /// Deliberately a free function on the album key rather than on the
+    /// identity's own keys: an album key is shared with other people, so
+    /// binding it to a personal key would either prevent sharing or leak
+    /// something personal into the sharing.
+    ///
+    /// The nonce is random per photo. It must never repeat under one key —
+    /// XChaCha20's 24-byte nonce makes random generation safe, which is the
+    /// reason for choosing XChaCha over ChaCha20's 12-byte nonce here.
+    pub fn seal_album_photo(
+        album_key: &[u8; 32],
+        plaintext: &[u8],
+        nonce: [u8; 24],
+    ) -> Result<lkng_album::EncryptedPhoto, IdentityError> {
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(album_key));
+        let ciphertext = cipher
+            .encrypt(XNonce::from_slice(&nonce), plaintext)
+            .map_err(|_| IdentityError::BadKey)?;
+        Ok(lkng_album::EncryptedPhoto {
+            nonce: nonce.to_vec(),
+            ciphertext,
+            generation: 0,
+            added_ms: 0,
+        })
+    }
+
+    /// Decrypt an album photo.
+    pub fn open_album_photo(
+        album_key: &[u8; 32],
+        photo: &lkng_album::EncryptedPhoto,
+    ) -> Result<Vec<u8>, IdentityError> {
+        if photo.nonce.len() != 24 {
+            return Err(IdentityError::Undecryptable);
+        }
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(album_key));
+        cipher
+            .decrypt(XNonce::from_slice(&photo.nonce), photo.ciphertext.as_ref())
+            .map_err(|_| IdentityError::Undecryptable)
+    }
+
+    /// Sign an album's state, filling in `owner_vk` and `sig`.
+    ///
+    /// Signs with the **durable** key, unlike presence. An album is a
+    /// long-lived thing its owner comes back to, and its address is known
+    /// only to people they granted it to — so this key is not sitting in a
+    /// public cell for scrapers, which is what makes the durable key
+    /// acceptable here and not there.
+    pub fn sign_album(
+        &self,
+        state: &mut lkng_album::AlbumState,
+        params: &lkng_album::AlbumParams,
+    ) -> Result<(), IdentityError> {
+        state.owner_vk = Some(self.verifying_key_bytes());
+        state.sig = None;
+        let payload = state
+            .signing_payload(params)
+            .map_err(|e| IdentityError::Encode(e.to_string()))?;
+        let sig: Signature<MlDsa65> = self
+            .signing
+            .expanded_key()
+            .sign_deterministic(&payload, SIGN_CONTEXT)
+            .map_err(|_| IdentityError::BadKey)?;
+        state.sig = Some(sig.encode().to_vec());
+        Ok(())
+    }
+
     /// Parameters addressing this identity's profile contract. The address
     /// IS the durable identity, so nobody else can occupy it — and because
     /// tiles are signed by epoch subkeys, scraping a cell never leads here.
@@ -1180,5 +1247,90 @@ mod migration_binding_tests {
             owner.for_epoch(1000).open_message(&env).unwrap(),
             b"still readable"
         );
+    }
+}
+
+#[cfg(test)]
+mod album_tests {
+    use super::*;
+    use lkng_album::{address_of, AlbumParams, AlbumState};
+
+    fn params(owner: &Identity) -> AlbumParams {
+        AlbumParams {
+            schema_v: 1,
+            address: address_of(&owner.verifying_key_bytes(), 0),
+        }
+    }
+
+    #[test]
+    fn a_photo_round_trips_under_the_album_key() {
+        let key = [0x2A; 32];
+        let photo = Identity::seal_album_photo(&key, b"jpeg bytes here", [7; 24]).unwrap();
+        assert_eq!(
+            Identity::open_album_photo(&key, &photo).unwrap(),
+            b"jpeg bytes here"
+        );
+    }
+
+    /// The property the album design rests on: the network holds ciphertext.
+    ///
+    /// If the plaintext ever appeared in the stored bytes, every "private"
+    /// album would be public and there would be no way to withdraw it.
+    #[test]
+    fn the_plaintext_never_appears_in_the_stored_bytes() {
+        let key = [0x2A; 32];
+        let secret = b"something private";
+        let photo = Identity::seal_album_photo(&key, secret, [9; 24]).unwrap();
+        let mut stored = Vec::new();
+        ciborium::ser::into_writer(&photo, &mut stored).unwrap();
+        assert!(
+            !stored.windows(secret.len()).any(|w| w == secret),
+            "plaintext reached the bytes that go on the network"
+        );
+    }
+
+    #[test]
+    fn the_wrong_key_cannot_open_a_photo() {
+        let photo = Identity::seal_album_photo(&[1; 32], b"private", [3; 24]).unwrap();
+        assert!(Identity::open_album_photo(&[2; 32], &photo).is_err());
+    }
+
+    /// Poly1305 must reject a modified ciphertext rather than returning
+    /// garbage — otherwise a peer could alter a photo undetectably.
+    #[test]
+    fn a_tampered_photo_is_rejected_not_garbled() {
+        let key = [5; 32];
+        let mut photo = Identity::seal_album_photo(&key, b"original", [4; 24]).unwrap();
+        photo.ciphertext[0] ^= 0xFF;
+        assert!(Identity::open_album_photo(&key, &photo).is_err());
+    }
+
+    #[test]
+    fn an_album_verifies_only_at_its_owners_address() {
+        let owner = Identity::from_seed([0x11; 32]);
+        let other = Identity::from_seed([0x22; 32]);
+
+        let mut album = AlbumState::default();
+        album.insert(Identity::seal_album_photo(&[8; 32], b"pic", [1; 24]).unwrap());
+        owner.sign_album(&mut album, &params(&owner)).unwrap();
+        lkng_album::verify::verify_album(&album, &params(&owner)).unwrap();
+
+        // Same signed album, presented at somebody else's address.
+        assert!(
+            lkng_album::verify::verify_album(&album, &params(&other)).is_err(),
+            "an album must not verify at an address its owner cannot derive, \
+             or a grant could point a viewer at an impostor's contract"
+        );
+    }
+
+    #[test]
+    fn editing_an_album_breaks_its_signature() {
+        let owner = Identity::from_seed([0x33; 32]);
+        let mut album = AlbumState::default();
+        album.insert(Identity::seal_album_photo(&[8; 32], b"pic", [1; 24]).unwrap());
+        owner.sign_album(&mut album, &params(&owner)).unwrap();
+
+        album.insert(Identity::seal_album_photo(&[8; 32], b"added", [2; 24]).unwrap());
+        assert!(lkng_album::verify::verify_album(&album, &params(&owner)).is_err());
     }
 }
