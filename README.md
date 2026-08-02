@@ -99,10 +99,26 @@ minimally otherwise. Both conditions are required: charging alone on a
 metered hotspot would spend someone's data allowance carrying other
 people's traffic.
 
+Off-condition, the node is capped at 5 ring connections and 200 KB/s total,
+against defaults of 20 and 3 MB/s. Not zero connections: a node that cannot
+route has silently left the network, and the user would stop receiving
+messages with nothing to tell them why.
+
+**This was cosmetic until 2026-08-01.** The condition was computed and used
+only to pick the notification text — a phone reading "saving battery" ran
+exactly as hard as a contributing one. Measured while dozing: **~41% of one
+core, sustained**. If you took the duty-cycling claim from this README
+before that date, it was not true.
+
 ### Caveats, honestly
 
-- Battery and Doze behaviour over hours is **not yet measured**. Short runs
-  look fine; that is not the same claim.
+- **CPU is ~41% of one core, sustained**, while contributing (measured over
+  30 minutes on a dozing, charging Z Flip 4). That is a lot for a background
+  service, and reducing it is unsolved — the cap above lowers the off-
+  condition cost but does nothing about the contributing case.
+- **Battery drain is still unmeasured.** adb requires the cable, so the phone
+  always reads as plugged and any drain figure would be meaningless. It needs
+  a cable-free run.
 - The APK bundles a cross-compiled node, and there is no upstream Android
   release asset, so it must be re-cross-compiled per release.
 - Tested on one device (Galaxy Z Flip 4, Android 16) and an x86_64 build

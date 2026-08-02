@@ -1793,3 +1793,39 @@ afterwards. Recorded as still-open rather than quietly skipped —
 `scripts/battery-watch.sh` is sampling CPU, RSS and Doze survival, which the
 cable does not affect, and charging is full-contribution mode so it is the
 interesting worst case for CPU.
+
+## 2026-08-01 — the duty cycle was cosmetic, and CPU is 41% of a core
+
+The long-run watcher answered a question nobody had asked yet.
+
+**Measured, dozing, over 30 minutes:** ~12 400 CPU ticks per 300 s sample,
+five samples running, i.e. **~41% of one core, sustained**. RSS drifted
+324 MB → 282 MB (something is evicting, which is at least working).
+
+Then the reason, which is worse than the number. `NodeService.startNode`
+computed `shouldContribute()` and used it for **exactly two things**: the
+state enum and the notification string. The command line was byte-identical
+either way. So:
+
+- a phone showing "On the network · saving battery" ran precisely as hard as
+  a contributing one;
+- the README's duty-cycling section described behaviour that did not exist;
+- and the app's central ethical claim — *users pay with resources, and we do
+  not treat those resources as free* — was being asserted by a notification
+  rather than implemented.
+
+This is the same shape as everything else found today: the code computed the
+right value and did not act on it, and nothing failed. The value was even
+logged. It just never reached the process.
+
+**Fixed:** off-condition the node now runs with
+`--max-number-of-connections 5 --total-bandwidth-limit 200000`, against
+defaults of 20 and 3 MB/s. Not zero connections — a node that cannot route
+has silently left the network, and the user would stop receiving messages
+with nothing to explain why.
+
+**Still unsolved, and now stated in the README rather than implied away:**
+41% of a core while *contributing* is a lot for a background service. The cap
+addresses the off-condition only. Bandwidth and connection limits do not
+obviously explain that much CPU, so the next question is what the node is
+actually doing — and that is a measurement, not a guess.

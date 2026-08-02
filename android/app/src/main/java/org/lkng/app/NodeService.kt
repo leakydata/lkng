@@ -98,6 +98,24 @@ class NodeService : Service() {
             "--network-port", NETWORK_PORT.toString(),
         )
 
+        // Make the duty cycle real.
+        //
+        // This block did not exist until 2026-08-01. `shouldContribute()`
+        // was computed and used only to choose the notification text, so a
+        // phone showing "saving battery" was doing exactly what a
+        // contributing one did. Measured while dozing: ~41% of one core,
+        // sustained, plugged in or not.
+        //
+        // The node accepts real limits, so use them. Fewer ring connections
+        // is the lever that matters: each one is a peer whose traffic this
+        // phone relays, and relaying is most of the cost.
+        if (!contributing) {
+            cmd += listOf(
+                "--max-number-of-connections", LEAN_CONNECTIONS.toString(),
+                "--total-bandwidth-limit", LEAN_BANDWIDTH_BPS.toString(),
+            )
+        }
+
         try {
             process = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
@@ -108,7 +126,13 @@ class NodeService : Service() {
                 if (contributing) "On the network · contributing"
                 else "On the network · saving battery"
             )
-            Log.i(TAG, "node started, contributing=$contributing")
+            Log.i(
+                TAG,
+                "node started, contributing=$contributing" +
+                    if (contributing) "" else
+                        " (capped at $LEAN_CONNECTIONS connections, " +
+                        "$LEAN_BANDWIDTH_BPS B/s)"
+            )
         } catch (e: Exception) {
             Log.e(TAG, "failed to start node", e)
             state.set(NodeState.ERROR)
@@ -124,6 +148,19 @@ class NodeService : Service() {
      * not what "pay with resources" means to anyone who has ever had a
      * data cap.
      */
+    /**
+     * Ring connections while saving battery.
+     *
+     * Not zero, and not one. A node with too few connections cannot route,
+     * which would make "saving battery" mean "silently left the network" —
+     * the user would stop receiving messages and nothing would say so. Five
+     * keeps it a participating peer at roughly a quarter of the relay load.
+     */
+    private val LEAN_CONNECTIONS = 5
+
+    /** 200 KB/s total while saving battery, against a 3 MB/s default. */
+    private val LEAN_BANDWIDTH_BPS = 200_000
+
     private fun shouldContribute(): Boolean {
         val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
         val charging = bm?.isCharging ?: false
