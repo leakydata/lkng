@@ -240,7 +240,7 @@ main {
 }
 .sval { font-size: 13.5px; line-height: 1.5; }
 
-/* ---- tab bar (unused; kept out of the way) ---- */
+/* ---- tab bar ---- */
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex;
@@ -326,3 +326,63 @@ main.hidden { display: none; }
   font: inherit; font-weight: 600; cursor: pointer;
 }
 .primary.wide:disabled { opacity: .6; }
+
+
+/* ---- tab bar additions ---- */
+.tab { display: flex; flex-direction: column; align-items: center; gap: 3px; position: relative; }
+.tab-icon { font-size: 17px; line-height: 1; }
+/* A count, not a red dot. See the comment on Tab::BAR in main.rs. */
+.pip {
+  position: absolute; top: 4px; right: 22%;
+  min-width: 16px; padding: 0 4px;
+  background: var(--accent); color: #0d0e12;
+  border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px;
+}
+
+/* ---- messages / taps / albums screens ---- */
+.screen { padding: 12px 16px 96px; }
+.screen-h { font-size: 17px; margin: 6px 0 14px; }
+.thread {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 10px 4px; background: none; border: none;
+  border-bottom: 1px solid var(--line);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.thumb.sm { width: 46px; height: 46px; border-radius: 50%; flex: none; }
+.thread-txt { min-width: 0; }
+.thread-name { font-weight: 600; font-size: 14.5px; }
+.thread-last {
+  color: var(--muted); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ---- open conversation ---- */
+.convo {
+  position: fixed; inset: 0; z-index: 25;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+}
+.msgs {
+  flex: 1; overflow-y: auto;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 8px;
+}
+.msg {
+  max-width: 78%; padding: 9px 12px; border-radius: 16px;
+  font-size: 14.5px; line-height: 1.4; word-wrap: break-word;
+}
+.msg.in { align-self: flex-start; background: #1b1d24; border-bottom-left-radius: 5px; }
+.msg.out { align-self: flex-end; background: var(--accent); color: #0d0e12; border-bottom-right-radius: 5px; }
+.composer {
+  display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  /* Above the on-screen keyboard AND the system nav bar. Without the inset
+     the send button sits under the gesture pill on a modern phone. */
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+}
+.composer input {
+  flex: 1; padding: 10px 14px; border-radius: 999px;
+  background: #1b1d24; border: 1px solid var(--line);
+  color: inherit; font: inherit; font-size: 14.5px;
+}
+.composer button { border-radius: 999px; padding: 10px 18px; }
+.composer button:disabled { opacity: .45; }
