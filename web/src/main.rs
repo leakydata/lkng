@@ -365,11 +365,57 @@ fn save_draft(d: &Draft) {
 /// your own avatar sits in the top-left of the header, and tapping it
 /// opens everything about *you* — profile, settings, account. The grid
 /// stays the home screen, because that is what the app is for.
+///
+/// Two navigation surfaces, because they answer two different questions and
+/// merging them made the app worse:
+///
+/// * the **tab bar** switches between the things you do — browsing, the
+///   people who noticed you, your conversations;
+/// * the **avatar menu** holds everything about *you* — profile, settings,
+///   account.
+///
+/// This is the split every app in the category uses, and it is not
+/// arbitrary: "edit my profile" is a rare, deliberate act, while "check my
+/// messages" happens constantly. Putting both in one list makes the common
+/// action slower and the rare one easier to hit by accident.
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Browse,
+    Taps,
+    Messages,
+    Albums,
     Profile,
     Settings,
+}
+
+impl Tab {
+    /// The tabs that appear in the bottom bar, in order.
+    const BAR: [Tab; 4] = [Tab::Browse, Tab::Taps, Tab::Messages, Tab::Albums];
+
+    fn label(self) -> &'static str {
+        match self {
+            Tab::Browse => "Browse",
+            Tab::Taps => "Taps",
+            Tab::Messages => "Messages",
+            Tab::Albums => "Albums",
+            Tab::Profile => "Profile",
+            Tab::Settings => "Settings",
+        }
+    }
+
+    /// Inline SVG rather than an icon font or image asset: the app is served
+    /// from inside a contract, where every extra file is another path that
+    /// has to resolve correctly on a node — the exact failure that once
+    /// rendered the whole grid as unstyled buttons.
+    fn icon(self) -> &'static str {
+        match self {
+            Tab::Browse => "▦",
+            Tab::Taps => "✦",
+            Tab::Messages => "✉",
+            Tab::Albums => "❑",
+            _ => "",
+        }
+    }
 }
 
 #[component]
