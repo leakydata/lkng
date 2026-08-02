@@ -2290,3 +2290,17 @@ Profiles are fetched when a tile is opened, not for every tile in the grid —
 fetching 500 profiles to render nine thumbnails would be the app treating the
 network as free — and verified before anything is rendered, since an
 unverified profile is whatever the last writer put at that address.
+
+**Proven on mainnet** (`profile_photos`): a profile with three photos
+published, fetched, verified — 18 628 bytes. All three photos identical to
+what was sent. **The primary is the one the owner chose, not the first in
+the list**; changing it and republishing is visible to a reader; and a
+tampered primary fails verification, so a peer cannot flip whose face a
+profile leads with.
+
+The test deliberately publishes with the *second* photo primary. Had the
+reader simply taken `photos[0]`, every other assertion would still have
+passed with primary = 0 and the bug would have shipped — which is exactly
+how photos looked finished twice before while being device-local.
+
+Added to the smoke suite, now six paths.

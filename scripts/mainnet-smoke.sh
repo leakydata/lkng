@@ -100,6 +100,7 @@ run tile_to_message  "$(W presence-cell presence_cell.wasm)" "$PARAMS" "$(W inbo
 run report_flow      "$(W moderation moderation_contract.wasm)"
 run album_share      "$(W album album_contract.wasm)" "$(W inbox inbox_contract.wasm)"
 run migrate_forward  "$(W inbox inbox_contract.wasm)"
+run profile_photos   "$(W profile profile_contract.wasm)"
 
 rm -f "$PARAMS"
 
