@@ -2254,6 +2254,7 @@ dependencies = [
 name = "lkng-web"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "ciborium",
  "dioxus",
  "freenet-stdlib",
@@ -2264,6 +2265,7 @@ dependencies = [
  "js-sys",
  "lkng-app",
  "lkng-identity",
+ "lkng-inbox",
  "lkng-location",
  "lkng-presence",
  "serde",

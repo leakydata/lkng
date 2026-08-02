@@ -12,13 +12,16 @@
 //!   no node, no account and no network. Demo tiles are still genuinely
 //!   signed and genuinely verified; only delivery is faked.
 
+mod chat;
 mod net;
 mod photo;
 
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
+use chat::Thread;
 use lkng_app::{Coverage, Grid, Privacy, Session, Tile, SCHEMA_V};
 use lkng_identity::Identity;
+use lkng_inbox::InboxParams;
 use lkng_presence::{CellParams, CellState};
 use net::{Node, Status};
 
