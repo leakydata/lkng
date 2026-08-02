@@ -1064,6 +1064,7 @@ dependencies = [
  "lkng-identity",
  "lkng-inbox",
  "lkng-location",
+ "lkng-moderation",
  "lkng-presence",
  "lkng-profile",
  "lkng-transport",
