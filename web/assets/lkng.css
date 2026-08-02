@@ -22,7 +22,7 @@ body {
 /* ---- top bar ---- */
 .bar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 12px;
   /* Safe-area inset, with a floor rather than a bare env(): on a phone the
      status bar sits on top of the page and the title collides with the
      clock. The 14px fallback covers browsers that report no inset. */
@@ -31,7 +31,7 @@ body {
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
 }
-.brand { font-weight: 700; letter-spacing: .14em; font-size: 15px; }
+.brand { font-weight: 700; letter-spacing: .14em; font-size: 15px; flex: 1; }
 .cell {
   display: flex; align-items: center; gap: 7px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -189,14 +189,68 @@ main {
   font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
 }
 
-/* ---- tab bar ---- */
+/* ---- avatar, menu, settings ---- */
+.me {
+  width: 30px; height: 30px; flex: 0 0 30px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background-size: cover; background-position: center;
+  color: var(--muted); font-size: 16px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 0;
+}
+.me.lg { width: 46px; height: 46px; flex-basis: 46px; font-size: 20px; }
+
+.menu-backdrop {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgba(0, 0, 0, .55);
+}
+.menu {
+  position: absolute; top: 0; left: 0; bottom: 0;
+  width: min(78vw, 320px);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 0 20px;
+  animation: slide .16s ease;
+}
+@keyframes slide { from { transform: translateX(-12px); opacity: .7 } }
+
+.menu-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.menu-name { font-weight: 600; font-size: 15px; }
+.menu-sub {
+  color: var(--muted); font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 15px 18px;
+  background: none; border: none; border-bottom: 1px solid var(--line);
+  color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
+}
+.menu-item:active { background: rgba(255, 255, 255, .05); }
+
+.setting { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.sname {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin-bottom: 6px;
+}
+.sval { font-size: 13.5px; line-height: 1.5; }
+
+/* ---- tab bar (unused; kept out of the way) ---- */
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex;
   background: rgba(13, 14, 18, .94);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Floor as well as inset: if the browser reports no safe-area
+     (older WebViews, viewport-fit ignored) the bar lands underneath the
+     system navigation and is simply invisible. */
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
 }
 .tab {
   flex: 1; padding: 13px 8px;
@@ -207,8 +261,8 @@ main {
 .tab.on { color: var(--accent); }
 
 /* keep the last row of tiles clear of the fixed tab bar */
-main { padding-bottom: 76px; }
-.foot { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+main { padding-bottom: 24px; }
+.foot { padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
 main.hidden { display: none; }
 
 /* ---- profile editor ---- */
@@ -230,7 +284,11 @@ main.hidden { display: none; }
   color: var(--muted); font-size: 13px;
   border: 1px dashed var(--line);
 }
-.photo-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* display:none, not an invisible overlay: an absolutely positioned
+   transparent file input sits over the whole label and gets activated
+   spuriously — four chooser dialogs opened on a single page load. A
+   hidden input still opens when its label is clicked. */
+.photo-pick input { display: none; }
 
 .field { margin: 14px 0; }
 .flabel {

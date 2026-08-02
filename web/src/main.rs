@@ -32,6 +32,12 @@ use net::{Node, Status};
 /// picture entirely, and costs one small file's worth of HTML.
 const CSS: &str = include_str!("../assets/lkng.css");
 
+/// Visible build marker.
+///
+/// Exists because "is the phone running the new UI?" was answered wrong
+/// twice by inference. A string on screen is not an inference.
+pub const BUILD_MARKER: &str = "b30363";
+
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
 /// way to write to a shared cell at all.
@@ -344,10 +350,16 @@ fn save_draft(d: &Draft) {
 }
 
 /// Which screen is showing.
+///
+/// Navigation follows the pattern people already know from this category:
+/// your own avatar sits in the top-left of the header, and tapping it
+/// opens everything about *you* — profile, settings, account. The grid
+/// stays the home screen, because that is what the app is for.
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Browse,
     Profile,
+    Settings,
 }
 
 #[component]
@@ -401,6 +413,7 @@ fn App() -> Element {
     let tiles = if live { found } else { demo_tiles(&session, &cov) };
 
     let mut tab = use_signal(|| Tab::Browse);
+    let mut menu = use_signal(|| false);
     let mut draft = use_signal(load_draft);
     let mut blocked = use_signal(Vec::<[u8; 32]>::new);
     let mut selected = use_signal(|| None::<Tile>);
@@ -444,6 +457,12 @@ fn App() -> Element {
         }
         style { dangerous_inner_html: CSS }
         header { class: "bar",
+            button {
+                class: "me",
+                style: "{avatar_style(&draft.read().thumbnail)}",
+                onclick: move |_| menu.set(!menu()),
+                if draft.read().thumbnail.is_empty() { "+" }
+            }
             div { class: "brand", "LKNG" }
             div { class: "cell",
                 span { class: if live { "dot" } else { "dot off" } }
@@ -454,11 +473,45 @@ fn App() -> Element {
             }
         }
 
+        if menu() {
+            div { class: "menu-backdrop", onclick: move |_| menu.set(false),
+                nav { class: "menu", onclick: move |e| e.stop_propagation(),
+                    div { class: "menu-head",
+                        div { class: "me lg", style: "{avatar_style(&draft.read().thumbnail)}",
+                            if draft.read().thumbnail.is_empty() { "+" }
+                        }
+                        div {
+                            div { class: "menu-name",
+                                if draft.read().display_name.is_empty() {
+                                    "Set up your profile"
+                                } else {
+                                    "{draft.read().display_name}"
+                                }
+                            }
+                            div { class: "menu-sub", "{cov.home.as_str()}" }
+                        }
+                    }
+                    button { class: "menu-item",
+                        onclick: move |_| { tab.set(Tab::Profile); menu.set(false); },
+                        "Edit profile" }
+                    button { class: "menu-item",
+                        onclick: move |_| { tab.set(Tab::Settings); menu.set(false); },
+                        "Settings and privacy" }
+                    button { class: "menu-item",
+                        onclick: move |_| { tab.set(Tab::Browse); menu.set(false); },
+                        "Back to browsing" }
+                }
+            }
+        }
+
         if tab() == Tab::Profile {
             ProfileEditor { draft: draft, onclose: move |_| tab.set(Tab::Browse) }
         }
+        if tab() == Tab::Settings {
+            SettingsPanel { onclose: move |_| tab.set(Tab::Browse) }
+        }
 
-        main { class: if tab() == Tab::Profile { "hidden" } else { "" },
+        main { class: if tab() == Tab::Browse { "" } else { "hidden" },
             p { class: "note", "{note}" }
 
             div { class: "grid",
@@ -511,21 +564,9 @@ fn App() -> Element {
             }
         }
 
-        nav { class: "tabs",
-            button {
-                class: if tab() == Tab::Browse { "tab on" } else { "tab" },
-                onclick: move |_| tab.set(Tab::Browse),
-                "Browse"
-            }
-            button {
-                class: if tab() == Tab::Profile { "tab on" } else { "tab" },
-                onclick: move |_| tab.set(Tab::Profile),
-                "Profile"
-            }
-        }
 
         footer { class: "foot",
-            "{visible.len()} nearby · location is coarse and jittered on your device"
+            "{visible.len()} nearby · build {BUILD_MARKER}"
             br {}
             // Say which protection is actually in force. A user cannot
             // judge the risk of an app that will not tell them.
@@ -764,4 +805,68 @@ fn b64(b: &[u8]) -> String {
         out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
     }
     out
+}
+
+/// Avatar background: the user's own photo, or a plus sign to add one.
+fn avatar_style(thumb: &[u8]) -> String {
+    if thumb.is_empty() {
+        "background: linear-gradient(135deg,#2a2d36,#181a20)".into()
+    } else {
+        format!("background-image:url(data:image/webp;base64,{})", b64(thumb))
+    }
+}
+
+/// Settings and privacy.
+///
+/// Deliberately leads with what the app is doing on the user's behalf —
+/// the node, the location precision, where their key lives — rather than
+/// with preferences. Someone deciding whether to trust this needs those
+/// facts first, and they are exactly what a conventional settings screen
+/// buries.
+#[component]
+fn SettingsPanel(onclose: EventHandler<()>) -> Element {
+    rsx! {
+        section { class: "editor",
+            header { class: "bar",
+                div { class: "brand", "Settings and privacy" }
+                button { class: "linkish", onclick: move |_| onclose.call(()), "Done" }
+            }
+            div { class: "form",
+                div { class: "setting",
+                    div { class: "sname", "Your key" }
+                    div { class: "sval",
+                        if identity_is_sealed() {
+                            "Sealed by this device's keystore"
+                        } else {
+                            "In browser storage — pre-alpha"
+                        }
+                    }
+                }
+                div { class: "setting",
+                    div { class: "sname", "Your location" }
+                    div { class: "sval",
+                        "Coarse only. Your position becomes a roughly 5 km area on this "
+                        "device before anything is shared, with a random offset. No "
+                        "distance is ever calculated or published."
+                    }
+                }
+                div { class: "setting",
+                    div { class: "sname", "Your node" }
+                    div { class: "sval",
+                        "This phone is part of the network. It carries traffic for others "
+                        "only while charging on Wi-Fi, and you can stop it any time from "
+                        "the notification."
+                    }
+                }
+                div { class: "setting",
+                    div { class: "sname", "What this does not hide" }
+                    div { class: "sval",
+                        "Your photo is public to people nearby. Anything published can be "
+                        "copied and cannot be fully deleted. Other people's stated "
+                        "location may not be true."
+                    }
+                }
+            }
+        }
+    }
 }

@@ -1210,3 +1210,43 @@ without reading one.
 the signed profile and republishing the presence tile with the new
 thumbnail is the next step — the crypto and contracts for both already
 exist and are tested.
+
+## 2026-08-01 — the stale-bundle day
+
+**Symptom:** the phone kept showing the old UI after every republish.
+
+**What I concluded, repeatedly and wrongly:** the phone's node had cached an
+old contract version; Freenet's self-update path was broken; a GET returns
+local state without checking for a newer version. I force-refetched the
+contract over `adb forward`, published directly into the phone's node, and
+told the user the self-update path "doesn't actually work yet".
+
+**Actual cause:** `dx bundle --platform web --release` re-emitted a previous
+build's wasm while reporting success. Every publish that day shipped
+identical, months-stale bytes. Deleting `web/target/dx/lkng-web/release`
+changed the content hash immediately (`dxh39b9bdecb45f69cc` →
+`dxhfa24f2e1b4517085`).
+
+**How it was finally caught:** stamping a unique string into the source and
+grepping the *compiled wasm* for it. Every earlier check compared the phone
+against the desktop — and they matched perfectly, because both were serving
+the same stale build. Comparing two copies of the same wrong thing looks
+exactly like success.
+
+**Two lessons worth more than the fix:**
+
+1. A build step that can silently emit stale output makes every downstream
+   diagnosis fiction. The reasoning about caching and eviction that day was
+   sound; the premise was false, so the conclusions were confident and wrong.
+2. Verify against *ground truth*, not against another derived copy. "Phone
+   matches desktop" was checked several times and was never evidence.
+
+**Fix:** [`scripts/publish-ui.sh`](../scripts/publish-ui.sh) deletes the
+bundle dir, stamps a marker, and **refuses to publish** if the marker is
+absent from the wasm. The marker renders in the app footer, so "is this
+device running the new build?" is answerable by looking at the screen —
+no adb, which is also how a real user would have to answer it.
+
+**Correction to the record:** the earlier gate-status claim that Freenet
+contract self-update is broken is withdrawn. It was never tested — the same
+bytes were being published each time, so of course nothing changed.
