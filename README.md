@@ -167,6 +167,7 @@ cargo test --workspace          # 161 tests, no network needed
 cd web && dx serve              # the UI against an in-memory backend
 cd android && gradle assembleDebug
 scripts/publish-ui.sh           # build contracts, then the UI, then publish
+scripts/mainnet-smoke.sh        # every write path, against the live network
 ```
 
 **Use `scripts/publish-ui.sh` rather than running `dx bundle` by hand.** It

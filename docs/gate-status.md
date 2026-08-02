@@ -1693,3 +1693,25 @@ passphrase safe, and the copy says so rather than showing a green bar.
 Still missing: nothing prompts for a backup during setup. It is a settings
 screen a user has to go looking for, which for the one action that prevents
 permanent account loss is the wrong shape. Onboarding should offer it.
+
+## 2026-08-01 — the mainnet smoke suite
+
+`scripts/mainnet-smoke.sh` runs all five proofs in sequence against the live
+network. Current result: **5 passed, 0 failed** — presence via seed-then-
+update, tile-to-message, reporting, album sharing with revocation, and
+migration.
+
+Every one of these examples exists because the path it covers shipped broken
+after being written carefully and read closely. So the suite is not a demo
+set; it is the only evidence the write paths work, and it needed to be one
+command rather than five things to remember before a release.
+
+It retries once per example, deliberately: mainnet PUTs time out under peer
+churn, and distinguishing that from a real failure is the difference between
+a useful signal and one people learn to ignore. Two failures in a row is
+reported as a failure.
+
+**What it does not cover, stated in the script's own output** so nobody
+mistakes a green run for more than it is: the UI, the WebView, the Android
+node lifecycle and battery cost are all outside it. Two people on two phones
+remains the test that matters, and has still not happened.
