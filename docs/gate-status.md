@@ -2217,3 +2217,43 @@ none did, naming the marker that is now orphaned in the source.
 A tool built to stop one class of silent inconsistency had quietly created
 another. That it took a routine verification pass to notice is the argument
 for running one.
+
+## 2026-08-02 — multiple profile photos, and the app can now update itself
+
+**Photos.** `PhotoRef` already carried `is_primary` and a hash — but the hash
+referred to chunked blobs that were never written, so a profile could name a
+primary photo it had no way to display. Photos are now stored inline
+(96 KiB each, 512 KiB total, 8 max) and the primary is chosen by the user.
+
+Decisions worth their weight:
+
+- **Exactly one primary is validated, not assumed.** Two makes two clients
+  disagree about whose face a profile shows; zero makes a profile with
+  photos display none. Both are tested.
+- **The aggregate cap exists as well as the per-photo one**, because eight
+  legal photos is 768 KiB and the total is what a replicating peer pays.
+- **Adding a photo does not silently become your main one.** Only the first
+  does. Changing the face strangers see in the grid should be a decision,
+  not a side effect of uploading a second picture.
+- **Changing the primary re-derives the 16 KiB tile image.** Without it the
+  grid keeps showing the old face while the profile shows the new one — and
+  the grid is the one strangers see.
+- **The primary choice is inside the signed payload**, so a peer cannot swap
+  which photo is someone's main one without breaking the signature.
+- `to_profile_photo` and `to_album_photo` now share one encoder. Two
+  near-identical copies is how one of them quietly stops stripping EXIF.
+
+**Self-update, closed.** The user reported the footer reading `b45941` while
+the current build was `b56492`, and force-stopping the app fixed it. So the
+node fetches new versions correctly — measured at ~15 minutes to a locked
+phone — but the running WebView keeps whatever it loaded at startup, and a
+user who leaves the app open sees an old build forever with no way to know.
+
+That matters more here than in most apps: there is no store review in this
+path, so a security fix reaches people only when their app reloads, and
+"force-stop the app" is not a remedy anyone applies to a bug they cannot see.
+
+The app now re-fetches its own page every ten minutes and reloads if the
+content-hashed asset names have changed. It reloads rather than prompting:
+the draft, messages and identity are all in storage, so a prompt buys
+nothing except the chance to decline a fix.

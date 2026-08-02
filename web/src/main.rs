@@ -39,7 +39,7 @@ const CSS: &str = include_str!("../assets/lkng.css");
 ///
 /// Exists because "is the phone running the new UI?" was answered wrong
 /// twice by inference. A string on screen is not an inference.
-pub const BUILD_MARKER: &str = "b56492";
+pub const BUILD_MARKER: &str = "b84545";
 
 /// Compiled presence-cell contract, embedded so the client can seed a cell
 /// it does not host. Without the code travelling with the PUT there is no
@@ -869,6 +869,7 @@ fn App() -> Element {
     let live = !found.is_empty();
     let tiles = if live { found } else { demo_tiles(&session, &cov) };
 
+    use_hook(watch_for_new_build);
     let mut age_ok = use_signal(age_confirmed);
     let mut tab = use_signal(|| Tab::Browse);
     let mut menu = use_signal(|| false);
@@ -2039,6 +2040,79 @@ fn TileCard(tile: Tile, onopen: EventHandler<Tile>) -> Element {
     }
 }
 
+/// Watch for a newer UI build and reload when one lands.
+///
+/// # Why this is needed
+///
+/// The UI is a Freenet contract, and the node fetches new versions on its
+/// own — measured at about fifteen minutes to a locked, dozing phone. But
+/// the *running* WebView keeps whatever it loaded at startup, so a user who
+/// leaves the app open sees an old build indefinitely and has no way to know
+/// it. Confirmed in the field: the footer read three builds behind until the
+/// app was force-stopped.
+///
+/// That matters more here than in most apps. There is no store review in
+/// this path, so a security fix reaches people only when their app reloads —
+/// and "force-stop the app" is not a remedy anyone will apply to a bug they
+/// cannot see.
+///
+/// # Why it compares the served page rather than a version endpoint
+///
+/// There is nothing to ask. The node serves whatever version of the contract
+/// it holds, so the honest check is to re-fetch the page we were served and
+/// see whether it points at different assets. A changed asset filename means
+/// a different build, because the filenames are content-hashed.
+fn watch_for_new_build() {
+    spawn(async move {
+        // The asset list from the page we are currently running.
+        let initial = fetch_asset_fingerprint().await;
+        loop {
+            // Ten minutes: the node needs time to fetch a new version at all,
+            // and a tighter poll would spend a phone's radio re-reading a
+            // page that changes a few times a week at most.
+            gloo_timers::future::TimeoutFuture::new(10 * 60 * 1000).await;
+            let now = fetch_asset_fingerprint().await;
+            if let (Some(a), Some(b)) = (&initial, &now) {
+                if a != b {
+                    // Reload rather than prompt. A prompt is the right call
+                    // when reloading would lose work; here the draft, the
+                    // messages and the identity are all in storage, so the
+                    // only thing a prompt buys is the chance to say no to a
+                    // fix.
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.location().reload();
+                    }
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// Asset filenames from the served page, which are content-hashed.
+async fn fetch_asset_fingerprint() -> Option<String> {
+    let w = web_sys::window()?;
+    let href = w.location().href().ok()?;
+    let resp = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str(&href))
+        .await
+        .ok()?;
+    let resp: web_sys::Response = resp.dyn_into().ok()?;
+    let text = wasm_bindgen_futures::JsFuture::from(resp.text().ok()?)
+        .await
+        .ok()?
+        .as_string()?;
+    // Just the hashed asset references; everything else on the page
+    // (nonces, timestamps) changes per request and would report a new build
+    // on every poll.
+    let mut refs: Vec<&str> = text
+        .split('"')
+        .filter(|t| t.contains("/assets/") && (t.ends_with(".js") || t.ends_with(".wasm")))
+        .collect();
+    refs.sort_unstable();
+    refs.dedup();
+    Some(refs.join("|"))
+}
+
 /// Re-derive the 256 px tile image from a profile photo.
 ///
 /// Used when the user changes which photo is primary. It re-encodes rather
@@ -2224,14 +2298,6 @@ fn ProfileEditor(draft: Signal<Draft>, onclose: EventHandler<()>) -> Element {
         status.set("saved to this device — publishing lands with the next build".into());
     };
 
-    let thumb_style = {
-        let d = draft.read();
-        if d.thumbnail.is_empty() {
-            "background: linear-gradient(135deg,#2a2d36,#181a20)".to_string()
-        } else {
-            format!("background-image:url(data:image/webp;base64,{})", b64(&d.thumbnail))
-        }
-    };
 
     rsx! {
         section { class: "editor",
