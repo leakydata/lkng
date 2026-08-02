@@ -1753,3 +1753,13 @@ not treat other people's resources as free had shipped an unoptimised 6.7 MB
 binary all evening. `opt-level = "z"` over `"s"` because nothing here is
 compute-bound: the heaviest operation is an ML-DSA verification in
 milliseconds, and nobody notices that who is waiting on megabytes.
+
+**Propagation, measured.** Build `b37598` was published to the desktop node
+at 22:28 and served byte-identical (2 710 288 bytes) by the phone's node
+within ~15 minutes — the phone dozing, screen locked, app in the background,
+only the foreground-service node running. No adb, no user action.
+
+That is the self-update claim demonstrated rather than asserted: a UI change
+reaches a locked phone over Freenet, with no store review and no server.
+It is one device on one network and should be read as such, but it is a
+measurement rather than a hope.

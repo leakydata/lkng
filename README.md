@@ -63,6 +63,18 @@ See [`android/app/src/main/java/org/lkng/app/NodeService.kt`](android/app/src/ma
 and [`scripts/gate2-device-test.sh`](scripts/gate2-device-test.sh), which
 runs the whole check against a connected device.
 
+### The app updates itself over Freenet
+
+The UI ships as a web-container contract, so a change reaches users without
+a store review. Measured on 2026-08-01: a new build published to a desktop
+node was served byte-identical by the phone's node within about 15 minutes,
+with the phone **dozing, locked, and the app in the background** — only the
+foreground-service node running. No cable, no user action.
+
+One device on one network, so read it as an existence proof rather than a
+performance figure. The native shell (node runner, Keystore, permissions)
+still updates through the stores; only the UI and app logic move this way.
+
 ### Duty cycling
 
 Users pay for this app with device resources rather than money, so the node
